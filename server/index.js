@@ -11,24 +11,20 @@ const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] },
 });
 
-// In-memory state
+//In-memory state
 const activeUsers = {};
 let drawHistory = [];
 let lastCanvasDataURL = null;
 let lastCanvasUpdateTime = Date.now();
 
-// Reset configuration - modify for testing
+//testing config below
 const RESET_CONFIG = {
-  // Normal: 0 (midnight EST)
-  // For testing: the hour you want (24-hour format, can be decimal)
-  hour: 0,
-
-  // Testing override: delay in minutes (uncomment for quick wipes)
-  testMode: false,
-  testDelayMinutes: 1,  // wipes every 1 minute when testMode=true
+  hour: 0,           // midnight EST
+  // testMode: false,
+  // testDelayMinutes: 1,
 };
 
-const INACTIVITY_LIMIT = 5 * 1000; // 5 second
+const INACTIVITY_LIMIT = 5 * 1000; // 5 seconds
 
 function broadcastActiveUsers() {
   const now = Date.now();
@@ -91,25 +87,21 @@ let resetTimeoutId = null;
 function scheduleReset() {
   if (resetTimeoutId) clearTimeout(resetTimeoutId);
 
-  // If testMode with testDelayMinutes, schedule quick wipes
+  //If testMode is enabled, use testDelayMinutes
   if (RESET_CONFIG.testMode && RESET_CONFIG.testDelayMinutes) {
     const ms = RESET_CONFIG.testDelayMinutes * 60 * 1000;
-    console.log(
-      `TEST MODE: scheduling a canvas wipe in ${RESET_CONFIG.testDelayMinutes} minutes.`
-    );
+    console.log(`TEST MODE: scheduling a canvas wipe in ${RESET_CONFIG.testDelayMinutes} minutes.`);
     resetTimeoutId = setTimeout(() => {
       console.log("TEST MODE: performing scheduled canvas wipe now!");
       clearCanvas();
-      scheduleReset(); // loop for next test wipe
+      scheduleReset();
     }, ms);
     return;
   }
 
-  // Regular midnight-EST schedule
+  //reg midnight-EST schedule
   const now = new Date();
-  const est = new Date(
-    now.toLocaleString("en-US", { timeZone: "America/New_York" })
-  );
+  const est = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
   const target = new Date(est);
 
   const hour = Math.floor(RESET_CONFIG.hour);
@@ -132,6 +124,9 @@ function scheduleReset() {
     scheduleReset();
   }, msUntil);
 }
+
+//Re-enable the daily reset at midnight EST:
+scheduleReset();
 
 io.on("connection", socket => {
   console.log("User connected:", socket.id);
@@ -223,18 +218,6 @@ io.on("connection", socket => {
   });
 });
 
-// Initialize the reset schedule on startup
-scheduleReset();
-
 server.listen(4000, () => {
   console.log("Server running on http://localhost:4000");
-  if (RESET_CONFIG.testMode && RESET_CONFIG.testDelayMinutes) {
-    console.log(
-      `⚠️ TEST MODE: Canvas will wipe every ${RESET_CONFIG.testDelayMinutes} minutes`
-    );
-  } else if (RESET_CONFIG.hour !== 0) {
-    const hh = Math.floor(RESET_CONFIG.hour);
-    const mm = Math.round((RESET_CONFIG.hour - hh) * 60);
-    console.log(`⚠️ Canvas resets daily at ${hh}:${mm.toString().padStart(2, "0")} EST`);
-  }
 });

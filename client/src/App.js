@@ -1,23 +1,25 @@
 // src/App.js
 
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import Canvas from "./canvas";
 import "./App.css";
 
 function App() {
+  const [timeLeft, setTimeLeft] = useState("");
+
   useEffect(() => {
-    // 1) Prevent Ctrl+wheel (Win/Linux) or ⌘+wheel (macOS)
+    //Prevent Ctrl+wheel Win/Linux and macOS
     const onWheel = (e) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
       }
     };
 
-    // 2) Prevent Ctrl + (+, -, =, 0) or ⌘ + same on macOS
+  
     const onKeyDown = (e) => {
       if (
-        (e.ctrlKey || e.metaKey) &&
-        ["+", "-", "=", "0"].includes(e.key)
+        (e.ctrlKey || e.metaKey) && 
+        ["+", "-", "=", "0"].includes(e.key) // Prevent Ctrl + (+, -, =, 0) + macos
       ) {
         e.preventDefault();
       }
@@ -26,16 +28,53 @@ function App() {
     window.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("keydown", onKeyDown);
 
+    // 3) Set up countdown timer
+    const updateCountdown = () => {
+      const now = new Date();
+      const midnight = new Date();
+      midnight.setHours(24, 0, 0, 0); // Next midnight
+      
+      let diff = midnight - now;
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      diff -= hours * (1000 * 60 * 60);
+      const minutes = Math.floor(diff / (1000 * 60));
+      diff -= minutes * (1000 * 60);
+      const seconds = Math.floor(diff / 1000);
+      
+      setTimeLeft(`${hours}h ${minutes}m ${seconds}s`);
+    };
+    
+    updateCountdown();
+    const intervalId = setInterval(updateCountdown, 1000);
+
     return () => {
       window.removeEventListener("wheel", onWheel);
       window.removeEventListener("keydown", onKeyDown);
+      clearInterval(intervalId);
     };
   }, []);
 
   return (
     <div className="app">
-      <h1>gone2morrow (“Everything is Temporary”)</h1>
+      <div className="header">
+        <h1>gone2morrow</h1>
+        <p className="tagline">Everyone Shares One Canvas. Create Or Destroy 😯 Nothing Lasts Forever!</p>
+      </div>
+      
+      <div className="info-box">
+        <div className="shortcut-tip">
+          <span>Tip: <kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo, <kbd>Ctrl</kbd>+<kbd>Y</kbd> to redo, right-click to erase</span>
+        </div>
+        <div>
+          Canvas resets in: <span className="countdown">{timeLeft}</span>
+        </div>
+      </div>
+      
       <Canvas />
+      
+      <div className="footer">
+        &copy; {new Date().getFullYear()} gone2morrow
+      </div>
     </div>
   );
 }

@@ -1,24 +1,94 @@
+/* App.css  */
+
+@import url('https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Quicksand:wght@300;400;500;600;700&display=swap');
+
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
+:root {
+  --primary: #000000;
+  --secondary: #000000;
+  --accent: #b6d0e9;
+  --light: #c0d9df;
+  --dark: #020202;
+  --shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
 html, body {
   height: 100%;
-  font-family: sans-serif;
-  background: #f9f9f9;
+  font-family: 'Quicksand', sans-serif;
+  background: var(--light);
+  color: var(--dark);
+  overflow-x: hidden;
 }
 
 .app {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 1rem;
+  padding: 1.5rem;
+  max-width: 1800px;
+  margin: 0 auto;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 1.5rem;
+  width: 100%;
 }
 
 h1 {
+  font-family: 'Permanent Marker', cursive;
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+  color: var(--primary);
+  text-shadow: 2px 2px 0 var(--accent);
+}
+
+.tagline {
+  font-size: 1.1rem;
+  font-weight: 500;
+  color: var(--secondary);
   margin-bottom: 1rem;
+}
+
+.info-box {
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 8px;
+  padding: 0.8rem 1.2rem;
+  margin-bottom: 1.2rem;
+  box-shadow: var(--shadow);
+  width: 100%;
+  max-width: 1600px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.shortcut-tip {
+  display: flex;
+  align-items: center;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.shortcut-tip kbd {
+  background: var(--dark);
+  color: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin: 0 3px;
+  font-size: 0.8rem;
+  box-shadow: 1px 1px 1px rgba(0,0,0,0.2);
+}
+
+.countdown {
+  font-weight: 600;
+  color: var(--secondary);
 }
 
 .canvas-container {
@@ -27,73 +97,134 @@ h1 {
   width: 100%;
   max-width: 1600px;
   overflow-x: auto;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow);
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 canvas {
-  border: 1px solid #333;
+  border: 2px solid var(--dark);
+  border-radius: 4px;
   max-width: 100%;
   height: auto;
   display: block;
   background: white;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
 }
 
 .toolbar {
   display: flex;
-  gap: 10px;
+  gap: 15px;
   margin-bottom: 1rem;
   flex-wrap: wrap;
   align-items: center;
-  padding: 0.5rem;
-  background: #f0f0f0;
-  border-radius: 4px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  padding: 1rem;
+  background: white;
+  border-radius: 8px;
+  box-shadow: var(--shadow);
   width: 100%;
   max-width: 1600px;
 }
 
 .toolbar label {
   font-size: 0.9rem;
+  font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
 }
 
 .toolbar input[type="range"] {
-  width: 100px;
+  width: 120px;
+  accent-color: var(--secondary);
+}
+
+.toolbar input[type="color"] {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  overflow: hidden;
+  cursor: pointer;
 }
 
 .toolbar button {
-  padding: 0.5rem 1rem;
-  border: 1px solid #999;
-  background: #eee;
+  padding: 0.5rem 1.2rem;
+  border: none;
+  background: var(--primary);
+  color: white;
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: 4px;
+  font-weight: 600;
   transition: all 0.2s;
+  font-family: 'Quicksand', sans-serif;
 }
 
 .toolbar button:hover {
-  background: #ddd;
+  background: var(--secondary);
+  transform: translateY(-2px);
+}
+
+.toolbar button.active {
+  background: var(--secondary);
+  box-shadow: 0 0 0 2px var(--light), 0 0 0 4px var(--secondary);
 }
 
 .cursor-pointer {
-  color: red;
-  font-size: 18px;
+  color: var(--secondary);
+  font-size: 20px;
   position: absolute;
   transform: translate(-50%, -50%);
   pointer-events: none;
+  filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.5));
 }
 
 .username-tag {
   position: absolute;
   top: 15px;
   left: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--primary);
   color: white;
-  padding: 2px 6px;
-  border-radius: 3px;
+  padding: 3px 8px;
+  border-radius: 12px;
   font-size: 12px;
+  font-weight: 500;
   white-space: nowrap;
   pointer-events: none;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.footer {
+  margin-top: 1.5rem;
+  text-align: center;
+  font-size: 0.8rem;
+  color: #666;
+}
+
+/* Animation for countdown */
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.countdown {
+  animation: pulse 2s infinite;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  h1 {
+    font-size: 2rem;
+  }
+  
+  .toolbar {
+    padding: 0.8rem;
+    gap: 10px;
+  }
+  
+  .info-box {
+    flex-direction: column;
+    gap: 0.8rem;
+    align-items: flex-start;
+  }
 }

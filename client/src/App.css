@@ -1,6 +1,4 @@
-/* App.css  */
-
-@import url('https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Quicksand:wght@300;400;500;600;700&display=swap');
+/* App.css LOC */
 
 * {
   margin: 0;
@@ -9,11 +7,10 @@
 }
 
 :root {
-  --primary: #000000;
+  --primary: #ffffff;
   --secondary: #000000;
-  --accent: #b6d0e9;
-  --light: #c0d9df;
-  --dark: #020202;
+  --light: #b0d3db;
+  --dark: #000000;
   --shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
 }
 
@@ -30,8 +27,9 @@ html, body {
   flex-direction: column;
   align-items: center;
   padding: 1.5rem;
-  max-width: 1800px;
+  max-width: 1800px; /*max-width */
   margin: 0 auto;
+  width: 100%; /*Ensure app takes full width */
 }
 
 .header {
@@ -41,11 +39,11 @@ html, body {
 }
 
 h1 {
-  font-family: 'Permanent Marker', cursive;
+  font-family: 'Permanent Marker', cursive; 
+  font-weight: bold; 
   font-size: 2.5rem;
   margin-bottom: 0.5rem;
-  color: var(--primary);
-  text-shadow: 2px 2px 0 var(--accent);
+  color: var(--secondary);
 }
 
 .tagline {
@@ -61,12 +59,13 @@ h1 {
   padding: 0.8rem 1.2rem;
   margin-bottom: 1.2rem;
   box-shadow: var(--shadow);
-  width: 100%;
-  max-width: 1600px;
+  width: 100%; 
+  max-width: 1600px; /*max-width */
   display: flex;
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
+  gap: 1rem; /* Add gap for wrapped items */
 }
 
 .shortcut-tip {
@@ -74,6 +73,8 @@ h1 {
   align-items: center;
   font-size: 0.9rem;
   color: #555;
+  flex-wrap: wrap;
+  gap: 3px;
 }
 
 .shortcut-tip kbd {
@@ -81,7 +82,6 @@ h1 {
   color: white;
   padding: 2px 6px;
   border-radius: 4px;
-  margin: 0 3px;
   font-size: 0.8rem;
   box-shadow: 1px 1px 1px rgba(0,0,0,0.2);
 }
@@ -92,37 +92,35 @@ h1 {
 }
 
 .canvas-container {
-  position: relative;
+  position: relative; /* Needed for absolute positioning */
   margin: 0 auto;
-  width: 100%;
-  max-width: 1600px;
-  overflow-x: auto;
+  width: 100%; 
+  max-width: 1600px; /*max width */
   box-shadow: var(--shadow);
   border-radius: 8px;
   overflow: hidden;
+  background: white;
+  border: 2px solid var(--dark);
 }
 
 canvas {
-  border: 2px solid var(--dark);
-  border-radius: 4px;
   max-width: 100%;
-  height: auto;
-  display: block;
-  background: white;
+  height: auto; /* Maintain aspect ratio */
+  display: block; /* Remove extra space below canvas */
 }
 
 .toolbar {
   display: flex;
-  gap: 15px;
+  gap: 15px; 
   margin-bottom: 1rem;
-  flex-wrap: wrap;
+  flex-wrap: wrap; 
   align-items: center;
-  padding: 1rem;
-  background: white;
+  padding: 1rem; 
+  background: white; 
   border-radius: 8px;
   box-shadow: var(--shadow);
-  width: 100%;
-  max-width: 1600px;
+  width: 100%; 
+  max-width: 1600px; 
 }
 
 .toolbar label {
@@ -134,73 +132,103 @@ canvas {
 }
 
 .toolbar input[type="range"] {
-  width: 120px;
-  accent-color: var(--secondary);
+  width: 120px; 
+  accent-color: var(--secondary); /*HERE*/
+  cursor: pointer; 
 }
 
 .toolbar input[type="color"] {
-  width: 32px;
+  width: 32px; 
   height: 32px;
   border: none;
   border-radius: 50%;
   overflow: hidden;
   cursor: pointer;
+  padding: 0;
+  background-color: transparent;
 }
 
+.toolbar input[type="color"]::-webkit-color-swatch-wrapper {
+    padding: 0;
+}
+.toolbar input[type="color"]::-webkit-color-swatch {
+    border: none;
+    border-radius: 50%;
+}
+.toolbar input[type="color"]::-moz-color-swatch {
+    border: none;
+    border-radius: 50%;
+}
+
+
 .toolbar button {
-  padding: 0.5rem 1.2rem;
+  padding: 0.5rem 1.2rem; 
   border: none;
-  background: var(--primary);
-  color: white;
+  background: var(--primary); 
+  color: rgb(0, 0, 0); 
   cursor: pointer;
   border-radius: 4px;
   font-weight: 600;
   transition: all 0.2s;
   font-family: 'Quicksand', sans-serif;
+  font-size: 1rem; 
+  line-height: 1.2; /* Adjust line height if needed */
+  min-width: 40px; 
+  text-align: center;
 }
 
 .toolbar button:hover {
-  background: var(--secondary);
+  background: var(--primary); 
+
+  filter: brightness(95%);
   transform: translateY(-2px);
 }
 
 .toolbar button.active {
-  background: var(--secondary);
-  box-shadow: 0 0 0 2px var(--light), 0 0 0 4px var(--secondary);
+  background: #b0d3db; 
+  color: black; 
+  box-shadow: 0 0 0 2px var(--light), 0 0 0 4px #555; 
 }
+
 
 .cursor-pointer {
   color: var(--secondary);
   font-size: 20px;
   position: absolute;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -100%); /* Position above the username tag */
   pointer-events: none;
   filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.5));
 }
 
 .username-tag {
   position: absolute;
-  top: 15px;
-  left: 0;
-  background: var(--primary);
-  color: white;
-  padding: 3px 8px;
-  border-radius: 12px;
-  font-size: 12px;
+  top: 8px; /* Position below the pointer */
+  left: 0px; /* Center */
+  transform: translateX(-50%); /* Center */
+  background: var(--secondary);                             /* background */
+  color: white; 
+  padding: 3px 8px; 
+  border-radius: 12px; 
+  font-size: 12px; 
   font-weight: 500;
   white-space: nowrap;
   pointer-events: none;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2); 
 }
+
+.eraser-preview {
+  background: rgba(255, 255, 255, 0.5); 
+}
+
 
 .footer {
-  margin-top: 1.5rem;
+  margin-top: 1.5rem; 
   text-align: center;
-  font-size: 0.8rem;
+  font-size: 0.8rem; 
   color: #666;
+  width: 100%;
 }
 
-/* Animation for countdown */
 @keyframes pulse {
   0% { transform: scale(1); }
   50% { transform: scale(1.05); }
@@ -209,22 +237,35 @@ canvas {
 
 .countdown {
   animation: pulse 2s infinite;
+  display: inline-block; 
 }
 
-/* Responsive adjustments */
-@media (max-width: 768px) {
+@media (max-width: 750px) {
   h1 {
     font-size: 2rem;
   }
-  
+
+  .app { 
+    padding: 1rem;
+  }
+
   .toolbar {
     padding: 0.8rem;
     gap: 10px;
+    justify-content: center; /* Center toolbar items on wrap */
   }
-  
+
   .info-box {
     flex-direction: column;
     gap: 0.8rem;
     align-items: flex-start;
   }
+}
+
+@media (max-width: 480px) {
+    .toolbar {
+        justify-content: space-around; 
+    }
+     .toolbar label span {
+     }
 }

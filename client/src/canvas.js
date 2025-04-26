@@ -1,3 +1,4 @@
+// src/canvas.js
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 
@@ -7,22 +8,19 @@ const socket = io("http://localhost:4000", { autoConnect: false });
 export default function Canvas() {
   const canvasRef = useRef(null);
   const canvasContainerRef = useRef(null);
-  // Create lastEmitTimeRef at component level, not in a callback
+  //Create lastEmitTimeRef at component level
   const lastEmitTimeRef = useRef(0);
 
   //Tools & user state
   const [tool, setTool] = useState("brush");
   const [color, setColor] = useState("#000000");
-  const [size, setSize] = useState();
+  const [size, setSize] = useState(5); //Set a default size
   const [username, setUsername] = useState("");
   const [activeUsers, setActiveUsers] = useState({});
- 
-  const [cursorPos, setCursorPos] = useState({ x: -100, y: -100 });  //Restore cursorPos state for eraser preview
-  
+  const [cursorPos, setCursorPos] = useState({ x: -100, y: -100 }); //State for eraser preview position
+  const [tempEraser, setTempEraser] = useState(false); //State for temporary eraser mode (right-click)
 
-  const [tempEraser, setTempEraser] = useState(false); //New state for tracking temporary eraser mode (for right click)
-
-  //Keep latest props in refs
+  //Keep latest props in refs for event handlers
   const toolRef = useRef(tool);
   const colorRef = useRef(color);
   const sizeRef = useRef(size);
@@ -39,13 +37,15 @@ export default function Canvas() {
   const undoStackRef = useRef([]);
   const redoStackRef = useRef([]);
 
+  // Username generation effect
   useEffect(() => {
     if (!username) {
-      const id = Math.floor(Math.random() * 1000) + 1; // Generate a random username once
+      const id = Math.floor(Math.random() * 1000);
       setUsername(`Anonymous${id}`);
     }
   }, [username]);
 
+  // Main setup effect for canvas, context, and listeners
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -53,56 +53,76 @@ export default function Canvas() {
 
     const canvasWidth = 1800;
     const canvasHeight = 830;
-    
+
     //Setup DPI-correct canvas
     const setupCanvas = () => {
+      if (!canvasContainerRef.current || !canvas) return;
       const containerRect = canvasContainerRef.current.getBoundingClientRect();
       const containerWidth = containerRect.width;
-      
+      const containerHeight = canvasHeight * (containerWidth / canvasWidth);
+
       //Set display size (CSS pixels)
       canvas.style.width = `${containerWidth}px`;
-      canvas.style.height = `${canvasHeight * (containerWidth / canvasWidth)}px`;
-      
-      // Set actual size in memory (scaled for DPI)
+      canvas.style.height = `${containerHeight}px`;
+
+      //Set actual size in memory (scaled for DPI)
       const scale = window.devicePixelRatio || 1;
       canvas.width = containerWidth * scale;
-      canvas.height = (canvasHeight * (containerWidth / canvasWidth)) * scale;
-      
-      // Scale the context to ensure correct drawing operations
+      canvas.height = containerHeight * scale;
+
+      //Scale the context drawings
       ctx.scale(scale, scale);
+      //Set drawing defaults after scaling
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
+      ctx.lineWidth = sizeRef.current;
+      ctx.strokeStyle = colorRef.current;
     };
-    
+
     setupCanvas();
-    
+
+    // Resize handler
     const handleResize = () => {
-      // Temporarily store the canvas content
       let tempCanvas = document.createElement('canvas');
       let tempCtx = tempCanvas.getContext('2d');
+      const scale = window.devicePixelRatio || 1;
       tempCanvas.width = canvas.width;
       tempCanvas.height = canvas.height;
       tempCtx.drawImage(canvas, 0, 0);
-      
-      //Resize and reset the canvas
+
       setupCanvas();
-      
-      // Draw back the content scaled to the new size
-      ctx.drawImage(tempCanvas, 0, 0, tempCanvas.width, tempCanvas.height, 
-                   0, 0, canvas.width / (window.devicePixelRatio || 1), 
-                   canvas.height / (window.devicePixelRatio || 1));
+
+      ctx.drawImage(tempCanvas, 0, 0, tempCanvas.width, tempCanvas.height,
+                   0, 0, canvas.width / scale, canvas.height / scale);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = sizeRef.current;
+      ctx.strokeStyle = colorRef.current;
     };
-    
+
     window.addEventListener("resize", handleResize);
 
-    //Get position in normalized coordinates
+    //Get position in normalized coordinates, handles mouse and touch
     const getPos = (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const cssX = e.clientX - rect.left;
-      const cssY = e.clientY - rect.top;
-      
-      //Return both normalized (0-1) and actual CSS pixel coordinates
-      return { 
+      if (!canvasRef.current) return { normX: 0, normY: 0, cssX: 0, cssY: 0 };
+      const rect = canvasRef.current.getBoundingClientRect();
+      let clientX, clientY;
+
+      if (e.touches && e.touches.length > 0) {
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+      } else if (e.changedTouches && e.changedTouches.length > 0) {
+        clientX = e.changedTouches[0].clientX;
+        clientY = e.changedTouches[0].clientY;
+      } else {
+        clientX = e.clientX;
+        clientY = e.clientY;
+      }
+
+      const cssX = clientX - rect.left;
+      const cssY = clientY - rect.top;
+
+      return {
         normX: cssX / rect.width,
         normY: cssY / rect.height,
         cssX: cssX,
@@ -118,136 +138,193 @@ export default function Canvas() {
       };
     };
 
+    //Eyedropper click handler
+    const handleCanvasClick = (e) => {
+      if (toolRef.current !== 'eyedropper' || !canvas || !ctx) return;
+
+      const pos = getPos(e);
+      const scale = window.devicePixelRatio || 1;
+
+      try {
+        const imageData = ctx.getImageData(pos.cssX * scale, pos.cssY * scale, 1, 1).data;
+        const r = imageData[0];
+        const g = imageData[1];
+        const b = imageData[2];
+
+        const hexColor = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+
+        setColor(hexColor);
+        setTool('brush');
+      } catch (error) {
+        console.error("Error getting image data for eyedropper:", error);
+        setTool('brush');
+      }
+    };
+
     let drawing = false;
     let lastNormX = 0, lastNormY = 0;
     let isRightClick = false;
 
     const startDrawing = (e) => {
-      
-      isRightClick = (e.button === 2); //right click
-      
-      // Handle tool behavior
-      // 1. If currently using eraser tool - always erase
-      // 2. If using brush with right-click - temporarily erase
-      // 3. If using brush with left-click - draw
-      
-      if (toolRef.current === "eraser" || isRightClick) {
-        // Set the temporary eraser state if right-clicking while in brush mode
+      if (e.touches) {
+        e.preventDefault();
+      }
+      if (!canvas || !ctx) return;
+
+      if (toolRef.current === 'eyedropper') {
+        handleCanvasClick(e);
+        return;
+      }
+
+      isRightClick = (e.button === 2);
+
+      const isErasing = toolRef.current === "eraser" || (isRightClick && toolRef.current === "brush");
+      if (isErasing && !tempEraserRef.current) {
         if (isRightClick && toolRef.current === "brush") {
           setTempEraser(true);
         }
       }
 
-      //Snapshot for undo
-      undoStackRef.current.push(
-        ctx.getImageData(0, 0, canvas.width, canvas.height)
-      );
-      redoStackRef.current = [];
+      try {
+        undoStackRef.current.push(
+          ctx.getImageData(0, 0, canvas.width, canvas.height)
+        );
+        redoStackRef.current = [];
+      } catch (error) {
+        console.error("Could not get ImageData for undo:", error);
+      }
 
       drawing = true;
       const pos = getPos(e);
-      lastNormX = pos.normX;
-      lastNormY = pos.normY;
-      
+      const bounded = clipToBounds(pos.normX, pos.normY);
+      lastNormX = bounded.x;
+      lastNormY = bounded.y;
+
+      ctx.strokeStyle = isErasing ? "#ffffff" : colorRef.current;
+      ctx.lineWidth = sizeRef.current;
+
       ctx.beginPath();
-      ctx.moveTo(pos.cssX, pos.cssY);
-      socket.emit("setUsername", usernameRef.current);
-      socket.emit("startDrawing", { 
-        x: pos.normX, 
-        y: pos.normY, 
-        username: usernameRef.current 
-      });
+      ctx.moveTo(lastNormX * canvas.clientWidth, lastNormY * canvas.clientHeight);
+
+      if (socket.connected) {
+        socket.emit("setUsername", usernameRef.current);
+        socket.emit("startDrawing", {
+          x: lastNormX,
+          y: lastNormY,
+          username: usernameRef.current
+        });
+      } else {
+        console.warn("Socket not connected, cannot start drawing.");
+      }
     };
 
     const draw = (e) => {
-      // Get position
+      if (e.touches) {
+        e.preventDefault();
+      }
+      if (!canvas || !ctx) return;
+
       const pos = getPos(e);
-      // Restore setting cursor position for eraser preview
       setCursorPos({ x: pos.cssX, y: pos.cssY });
-      
+
       if (!drawing) {
-        // Throttle mouse move events when not drawing
         const now = Date.now();
-        if (now - lastEmitTimeRef.current > 50) { // Send at most every 50ms
-          // Apply bounds checking before sending
+        if (now - lastEmitTimeRef.current > 50) {
           const bounded = clipToBounds(pos.normX, pos.normY);
-          socket.emit("mouseMove", { 
-            x: bounded.x, 
-            y: bounded.y, 
-            username: usernameRef.current 
-          });
+          if (socket.connected) {
+            socket.emit("mouseMove", {
+              x: bounded.x,
+              y: bounded.y,
+              username: usernameRef.current
+            });
+          }
           lastEmitTimeRef.current = now;
         }
         return;
       }
 
-      // Draw locally
-      ctx.lineTo(pos.cssX, pos.cssY);
-      
-      // Decide if in erasing mode
       const isErasing = toolRef.current === "eraser" || tempEraserRef.current;
-      
+
       ctx.strokeStyle = isErasing ? "#ffffff" : colorRef.current;
       ctx.lineWidth = sizeRef.current;
-      ctx.stroke();
 
-      // Apply bounds checking before sending
       const bounded = clipToBounds(pos.normX, pos.normY);
 
-      //Send to server using normalized coordinates
-      socket.emit("draw", {
-        x0: lastNormX,
-        y0: lastNormY,
-        x1: bounded.x,
-        y1: bounded.y,
-        color: isErasing ? "#ffffff" : colorRef.current,
-        size: sizeRef.current,
-        username: usernameRef.current,
-      });
+      ctx.lineTo(bounded.x * canvas.clientWidth, bounded.y * canvas.clientHeight);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(bounded.x * canvas.clientWidth, bounded.y * canvas.clientHeight);
+
+      if (socket.connected) {
+        socket.emit("draw", {
+          x0: lastNormX,
+          y0: lastNormY,
+          x1: bounded.x,
+          y1: bounded.y,
+          color: isErasing ? "#ffffff" : colorRef.current,
+          size: sizeRef.current,
+          username: usernameRef.current,
+        });
+      }
 
       lastNormX = bounded.x;
       lastNormY = bounded.y;
     };
 
-    const stopDrawing = () => {
-      if (!drawing) return;
-      
+
+    
+    const stopDrawing = () => { 
+      if (!drawing || !canvas || !ctx) return;
+
       drawing = false;
-      
-      // Reset the temporary eraser when right-click is released
-      if (isRightClick && toolRef.current === "brush") {
+
+      if (tempEraserRef.current) {
         setTempEraser(false);
       }
       isRightClick = false;
-      
-      socket.emit("stopDrawing", { username: usernameRef.current });
-      
-      // Send canvas state after stopping drawing to ensure server has latest
-      socket.emit("canvasSnapshot", canvas.toDataURL());
+
+      if (socket.connected) {
+        socket.emit("stopDrawing", { username: usernameRef.current });
+
+        try {
+          socket.emit("canvasSnapshot", canvas.toDataURL("image/webp", 0.8));
+        } catch (error) {
+          console.error("Could not get canvas data URL on stopDrawing:", error);
+        }
+      }
+
+      ctx.beginPath();
+      setCursorPos({ x: -100, y: -100 });
     };
-    
-    canvas.addEventListener("contextmenu", e => e.preventDefault()); //for right clicking to erase
+
+    // Event Listeners
+    canvas.addEventListener("contextmenu", e => e.preventDefault());
+
     canvas.addEventListener("mousedown", startDrawing);
     canvas.addEventListener("mousemove", draw);
     canvas.addEventListener("mouseup", stopDrawing);
     canvas.addEventListener("mouseleave", stopDrawing);
 
-    //Socket event handlers
+    canvas.addEventListener("touchstart", startDrawing, { passive: false });
+    canvas.addEventListener("touchmove", draw, { passive: false });
+    canvas.addEventListener("touchend", stopDrawing);
+    canvas.addEventListener("touchcancel", stopDrawing);
+
+    // Socket event handlers
     socket.on("initialCanvas", (history) => {
-      //Clear canvas first
-      ctx.clearRect(0, 0, canvas.width / (window.devicePixelRatio || 1), 
-                   canvas.height / (window.devicePixelRatio || 1));
-      
-      //Apply draw history with coordinate conversion
+      if (!canvas || !ctx) return;
+      const scale = window.devicePixelRatio || 1;
+      ctx.clearRect(0, 0, canvas.width / scale, canvas.height / scale);
+
       history.forEach(({ x0, y0, x1, y1, color, size }) => {
         const rect = canvas.getBoundingClientRect();
-        
-        //Convert normalized coordinates to this canvas's pixels
+
         const cssX0 = x0 * rect.width;
         const cssY0 = y0 * rect.height;
         const cssX1 = x1 * rect.width;
         const cssY1 = y1 * rect.height;
-        
+
         ctx.beginPath();
         ctx.moveTo(cssX0, cssY0);
         ctx.lineTo(cssX1, cssY1);
@@ -255,19 +332,25 @@ export default function Canvas() {
         ctx.lineWidth = size;
         ctx.stroke();
       });
-      
-      undoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)];
+
+      try {
+        undoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)];
+        redoStackRef.current = [];
+      } catch (error) {
+        console.error("Could not get ImageData for initial undo state:", error);
+        undoStackRef.current = [];
+      }
     });
 
     socket.on("draw", ({ x0, y0, x1, y1, color, size }) => {
-      const rect = canvas.getBoundingClientRect();
-      
-      //Convert normalized coordinates to this canvas's pixels DO NOT TOUCH ANYTHING DO NOT TOUCH ANYTHING HERE 
+      if (!canvasRef.current || !canvas || !ctx) return;
+      const rect = canvasRef.current.getBoundingClientRect();
+
       const cssX0 = x0 * rect.width;
       const cssY0 = y0 * rect.height;
       const cssX1 = x1 * rect.width;
       const cssY1 = y1 * rect.height;
-      
+
       ctx.beginPath();
       ctx.moveTo(cssX0, cssY0);
       ctx.lineTo(cssX1, cssY1);
@@ -277,63 +360,92 @@ export default function Canvas() {
     });
 
     socket.on("clear", () => {
-      ctx.clearRect(0, 0, canvas.width / (window.devicePixelRatio || 1), 
-                   canvas.height / (window.devicePixelRatio || 1));
+      if (!canvas || !ctx) return;
+      const scale = window.devicePixelRatio || 1;
+      ctx.clearRect(0, 0, canvas.width / scale, canvas.height / scale);
       undoStackRef.current = [];
       redoStackRef.current = [];
+
+      try {
+        undoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+      } catch (error) {
+        console.error("Could not get ImageData for undo after clear:", error);
+      }
     });
 
     socket.on("canvasState", (dataURL) => {
+      if (!canvas || !ctx) return;
       const img = new Image();
       img.onload = () => {
-        ctx.clearRect(0, 0, canvas.width / (window.devicePixelRatio || 1), 
-                     canvas.height / (window.devicePixelRatio || 1));
-        
-        ctx.drawImage(img, 0, 0, canvas.width / (window.devicePixelRatio || 1), 
-                          canvas.height / (window.devicePixelRatio || 1));
-                           
-        undoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)];
-        redoStackRef.current = [];
+        const scale = window.devicePixelRatio || 1;
+        ctx.clearRect(0, 0, canvas.width / scale, canvas.height / scale);
+        ctx.drawImage(img, 0, 0, canvas.width / scale, canvas.height / scale);
+
+        try {
+          undoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)];
+          redoStackRef.current = [];
+        } catch (error) {
+          console.error("Could not get ImageData for undo after receiving state:", error);
+          undoStackRef.current = [];
+        }
+      };
+      img.onerror = (err) => {
+        console.error("Failed to load canvas state image:", err);
       };
       img.src = dataURL;
     });
 
     socket.on("userMouseMove", (users) => {
-      //Apply boundary checking to all incoming user positions
       const boundedUsers = {};
-      Object.entries(users).forEach(([id, data]) => {
-        //Ensure bounds are applied to incoming coordinates
+      const otherUsers = { ...users };
+      if (socket.id && otherUsers[socket.id]) {
+        delete otherUsers[socket.id];
+      }
+
+      Object.entries(otherUsers).forEach(([id, data]) => {
         const bounded = clipToBounds(data.x, data.y);
-        boundedUsers[id] = {...data, x: bounded.x, y: bounded.y};
+        boundedUsers[id] = { ...data, x: bounded.x, y: bounded.y };
       });
       setActiveUsers(boundedUsers);
     });
 
-    //Handle server requesting a canvas snapshot
     socket.on("requestCanvasSnapshot", () => {
-      socket.emit("canvasSnapshot", canvas.toDataURL());
+      if (!canvas) return;
+      try {
+        socket.emit("canvasSnapshot", canvas.toDataURL("image/webp", 0.8));
+      } catch (error) {
+        console.error("Could not get canvas data URL for snapshot request:", error);
+      }
     });
 
-    
-    socket.connect(); //connect
+    socket.connect();
 
-    //Periodically checking t ensure server has latest canvas state
     const intervalId = setInterval(() => {
-      //If connected, send a snapshot
-      if (socket.connected) {
-        socket.emit("canvasSnapshot", canvas.toDataURL());
+      if (socket.connected && canvas) {
+        try {
+          socket.emit("canvasSnapshot", canvas.toDataURL("image/webp", 0.7));
+        } catch (error) {
+          // Ignore errors for periodic backup
+        }
       }
-    }, 60000); // Every minuteish
+    }, 60000);
 
-    //Clean up on unmount
+    // Clean up
     return () => {
       socket.disconnect();
       clearInterval(intervalId);
       window.removeEventListener("resize", handleResize);
-      canvas.removeEventListener("mousedown", startDrawing);
-      canvas.removeEventListener("mousemove", draw);
-      canvas.removeEventListener("mouseup", stopDrawing);
-      canvas.removeEventListener("mouseleave", stopDrawing);
+      if (canvas) {
+        canvas.removeEventListener("contextmenu", e => e.preventDefault());
+        canvas.removeEventListener("mousedown", startDrawing);
+        canvas.removeEventListener("mousemove", draw);
+        canvas.removeEventListener("mouseup", stopDrawing);
+        canvas.removeEventListener("mouseleave", stopDrawing);
+        canvas.removeEventListener("touchstart", startDrawing);
+        canvas.removeEventListener("touchmove", draw);
+        canvas.removeEventListener("touchend", stopDrawing);
+        canvas.removeEventListener("touchcancel", stopDrawing);
+      }
       socket.off("initialCanvas");
       socket.off("draw");
       socket.off("clear");
@@ -343,29 +455,45 @@ export default function Canvas() {
     };
   }, [username]);
 
-  //undo and redo handling
+  // Undo and redo handling effect
   useEffect(() => {
     const handler = (e) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
-      
-      if (e.ctrlKey && e.key === "z") {
-        e.preventDefault(); //
-        const last = undoStackRef.current.pop();
-        if (last) {
-          redoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
-          ctx.putImageData(last, 0, 0);
-          socket.emit("canvasState", canvas.toDataURL());
-        }
-      }
-      if (e.ctrlKey && e.key === "y") {
-        e.preventDefault(); //
-        const next = redoStackRef.current.pop();
-        if (next) {
-          undoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
-          ctx.putImageData(next, 0, 0);
-          socket.emit("canvasState", canvas.toDataURL());
+      if (!ctx) return;
+
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === "z") {
+          e.preventDefault();
+          if (undoStackRef.current.length > 1) {
+            const lastState = undoStackRef.current.pop();
+            try {
+              redoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+              ctx.putImageData(lastState, 0, 0);
+              if (socket.connected) {
+                socket.emit("canvasState", canvas.toDataURL("image/webp", 0.8));
+              }
+            } catch (error) {
+              console.error("Could not get/put ImageData for undo:", error);
+              if (lastState) undoStackRef.current.push(lastState);
+            }
+          }
+        } else if (e.key === "y") {
+          e.preventDefault();
+          const nextState = redoStackRef.current.pop();
+          if (nextState) {
+            try {
+              undoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+              ctx.putImageData(nextState, 0, 0);
+              if (socket.connected) {
+                socket.emit("canvasState", canvas.toDataURL("image/webp", 0.8));
+              }
+            } catch (error) {
+              console.error("Could not get/put ImageData for redo:", error);
+              redoStackRef.current.push(nextState);
+            }
+          }
         }
       }
     };
@@ -374,85 +502,113 @@ export default function Canvas() {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  //Send current username when it changes
   useEffect(() => {
     if (username && socket.connected) {
       socket.emit("setUsername", username);
     }
   }, [username]);
 
-  const isErasingMode = tool === "eraser" || tempEraser; //Determine if  in eraser mode (either selected or temporary)
+  const isErasingMode = tool === "eraser" || tempEraser;
+  const canvasCursor = tool === 'eyedropper' ? 'crosshair' : (isErasingMode ? 'grab' : 'crosshair');
 
   return (
     <>
       <div className="toolbar">
-        <button onClick={() => setTool("brush")} style={{ background: tool === "brush" ? "#ccc" : "#eee" }}>
-          Brush
+        <button
+          onClick={() => setTool("brush")}
+          className={tool === "brush" ? "active" : ""}
+          title="Brush Tool"
+        >
+          BRUSH
         </button>
-        <button onClick={() => setTool("eraser")} style={{ background: tool === "eraser" ? "#ccc" : "#eee" }}>
-          Eraser
+        <button
+          onClick={() => setTool("eraser")}
+          className={tool === "eraser" ? "active" : ""}
+          title="Eraser Tool"
+        >
+          ERASE
         </button>
-        <label>
+
+        <label htmlFor="size-slider">
           Size:
-          <input type="range" min={1} max={20} value={size} onChange={e => setSize(+e.target.value)} />
+          <input
+            id="size-slider"
+            type="range"
+            min={1}
+            max={20}
+            value={size}
+            onChange={e => setSize(+e.target.value)}
+          />
           <span>{size}px</span>
         </label>
-        <label>
+        <label htmlFor="color-picker">
           Color:
-          <input type="color" value={color} onChange={e => setColor(e.target.value)} disabled={isErasingMode} />
+          <input
+            id="color-picker"
+            type="color"
+            value={color}
+            onChange={e => setColor(e.target.value)}
+            disabled={isErasingMode || tool === 'eyedropper'}
+          />
         </label>
+
+        <button
+          onClick={() => setTool("eyedropper")}
+          className={tool === "eyedropper" ? "active" : ""}
+          title="Color Picker Tool"
+        >
+          COLOR MATCH
+        </button>
       </div>
 
-      <p style={{ fontSize: "0.8rem", color: "#666" }}>
-        
-      </p>
-
       <div className="canvas-container" ref={canvasContainerRef}>
-        <canvas ref={canvasRef} />
-        
-        {/* Eraser preview circle */}
-        {isErasingMode && (
+        <canvas
+          ref={canvasRef}
+          style={{ cursor: canvasCursor }}
+        />
+
+        {isErasingMode && cursorPos.x > -100 && (
           <div
             className="eraser-preview"
             style={{
               position: "absolute",
-              left: `${cursorPos.x - size / 2}px`,
-              top: `${cursorPos.y - size / 2}px`,
+              left: `${cursorPos.x}px`,
+              top: `${cursorPos.y}px`,
               width: `${size}px`,
               height: `${size}px`,
-              border: "1px solid #000",
+              border: "1px dashed grey",
               borderRadius: "50%",
+              transform: 'translate(-50%, -50%)',
               pointerEvents: "none",
-              zIndex: 5
+              zIndex: 10
             }}
+            aria-hidden="true"
           />
         )}
-        
-        {/*User cursor indicators with normalized coordinates*/}
+
         <div style={{
-          position: "absolute", //dont change
+          position: "absolute",
           top: 0,
           left: 0,
-          width: "100vw",
-          height: "100vh",
+          width: "100%",
+          height: "100%",
           pointerEvents: "none",
           zIndex: 5
         }}>
-          {Object.entries(activeUsers).map(([id, data]) =>
-            id !== socket.id && canvasContainerRef.current && (
-              <div key={id} style={{ 
-                position: "absolute", 
-                left: `${data.x * canvasContainerRef.current.getBoundingClientRect().width}px`,
-                top: `${data.y * canvasContainerRef.current.getBoundingClientRect().height}px`,
-                transition: "transform 0.05s ease-out, left 0.05s ease-out, top 0.05s ease-out" //Add smooth transitions 
-              }}>
-                <div className="cursor-pointer">▼</div>
-                <div className="username-tag">{data.username}</div>
-              </div>
-            )
-          )}
+          {canvasContainerRef.current && Object.entries(activeUsers).map(([id, data]) => (
+            <div key={id} style={{
+              position: "absolute",
+              left: `${data.x * canvasContainerRef.current.clientWidth}px`,
+              top: `${data.y * canvasContainerRef.current.clientHeight}px`,
+              transition: "left 0.05s linear, top 0.05s linear"
+            }}>
+              <div className="cursor-pointer">▼</div>
+              <div className="username-tag">{data.username}</div>
+            </div>
+          ))}
         </div>
       </div>
     </>
   );
 }
+

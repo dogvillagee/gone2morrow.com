@@ -25,7 +25,7 @@ const RESET_CONFIG = {
   // testMode: false,    //
   // testDelayMinutes: 1, //
 };
-const INACTIVITY_LIMIT = 5 * 1000; // 5 seconds ish
+const INACTIVITY_LIMIT = 15 * 1000; // 15 seconds ish
 const MAX_DRAW_HISTORY = 5000; // Max number of draw segments to keep in history 
 const BROADCAST_INTERVAL = 1000; // How often to broadcast user positions (ms)
 const SNAPSHOT_REQUEST_INTERVAL = 15000; // How often to check if a snapshot is needed (ms)

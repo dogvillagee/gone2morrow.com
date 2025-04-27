@@ -509,7 +509,7 @@ export default function Canvas() {
   }, [username]);
 
   const isErasingMode = tool === "eraser" || tempEraser;
-  const canvasCursor = tool === 'eyedropper' ? 'crosshair' : (isErasingMode ? 'grab' : 'crosshair');
+  const canvasCursor = tool === 'eyedropper' ? 'pointer' : (isErasingMode ? 'grab' : 'default');
 
   return (
     <>
@@ -611,4 +611,3 @@ export default function Canvas() {
     </>
   );
 }
-

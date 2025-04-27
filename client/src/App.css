@@ -40,7 +40,7 @@ html, body {
 }
 
 h1 {
-  font-family: 'Permanent Marker', cursive; 
+  font-family: 'Permanent Marker'; 
   font-weight: bold; 
   font-size: 2.5rem;
   margin-bottom: 0.5rem;
@@ -243,7 +243,7 @@ canvas {
   display: inline-block; 
 }
 
-@media (max-width: 750px) {
+@media (max-width: 800px) {
   h1 {
     font-size: 2rem;
   }
@@ -269,6 +269,5 @@ canvas {
     .toolbar {
         justify-content: space-around; 
     }
-     .toolbar label span {
-     }
+     
 }

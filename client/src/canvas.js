@@ -51,53 +51,89 @@ export default function Canvas() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
 
-    const canvasWidth = 1800;
-    const canvasHeight = 830;
-
+    // Base canvas dimensions (logical size)
+    const baseWidth = 1800;
+    const baseHeight = 830;
+    
+    // Cache for the canvas state during resize
+    let canvasCache = null;
+    
     //Setup DPI-correct canvas
     const setupCanvas = () => {
       if (!canvasContainerRef.current || !canvas) return;
+      
+      // Get the container's display size
       const containerRect = canvasContainerRef.current.getBoundingClientRect();
       const containerWidth = containerRect.width;
-      const containerHeight = canvasHeight * (containerWidth / canvasWidth);
+      
+      // Calculate height maintaining the original aspect ratio
+      const aspectRatio = baseHeight / baseWidth;
+      const containerHeight = containerWidth * aspectRatio;
 
-      //Set display size (CSS pixels)
+      // Save current canvas state if not first setup
+      if (canvas.width > 0 && canvas.height > 0) {
+        try {
+          canvasCache = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        } catch (error) {
+          console.error("Could not cache canvas during resize:", error);
+        }
+      }
+
+      // Set display size (CSS pixels) - this controls how large the canvas appears
       canvas.style.width = `${containerWidth}px`;
       canvas.style.height = `${containerHeight}px`;
 
-      //Set actual size in memory (scaled for DPI)
-      const scale = window.devicePixelRatio || 1;
-      canvas.width = containerWidth * scale;
-      canvas.height = containerHeight * scale;
+      // Get device pixel ratio
+      const dpr = window.devicePixelRatio || 1;
+      
+      // Set actual size in memory (scaled for DPI)
+      // This is the resolution of the canvas and should match the display size multiplied by DPR
+      canvas.width = Math.floor(containerWidth * dpr);
+      canvas.height = Math.floor(containerHeight * dpr);
 
-      //Scale the context drawings
-      ctx.scale(scale, scale);
-      //Set drawing defaults after scaling
+      // Scale the context to match the display size
+      ctx.scale(dpr, dpr);
+      
+      // Set drawing defaults
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.lineWidth = sizeRef.current;
       ctx.strokeStyle = colorRef.current;
+      
+      // Restore canvas state if we had one
+      if (canvasCache) {
+        // Calculate scaling to maintain aspect ratio
+        const scaleX = containerWidth / (canvasCache.width / dpr);
+        const scaleY = containerHeight / (canvasCache.height / dpr);
+        
+        // Create temporary canvas for proper scaling
+        const tempCanvas = document.createElement('canvas');
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCanvas.width = canvasCache.width;
+        tempCanvas.height = canvasCache.height;
+        tempCtx.putImageData(canvasCache, 0, 0);
+        
+        // Clear and redraw at new size with proper scaling
+        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+        ctx.drawImage(
+          tempCanvas, 
+          0, 0, canvasCache.width, canvasCache.height,
+          0, 0, containerWidth, containerHeight
+        );
+        
+        canvasCache = null;
+      }
     };
 
     setupCanvas();
 
-    // Resize handler
+    // Debounce resize handler
+    let resizeTimeout = null;
     const handleResize = () => {
-      let tempCanvas = document.createElement('canvas');
-      let tempCtx = tempCanvas.getContext('2d');
-      const scale = window.devicePixelRatio || 1;
-      tempCanvas.width = canvas.width;
-      tempCanvas.height = canvas.height;
-      tempCtx.drawImage(canvas, 0, 0);
-
-      setupCanvas();
-
-      ctx.drawImage(tempCanvas, 0, 0, tempCanvas.width, tempCanvas.height,
-                   0, 0, canvas.width / scale, canvas.height / scale);
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.lineWidth = sizeRef.current;
-      ctx.strokeStyle = colorRef.current;
+      if (resizeTimeout) clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => {
+        setupCanvas();
+      }, 100); // Debounce resize events
     };
 
     window.addEventListener("resize", handleResize);
@@ -272,8 +308,6 @@ export default function Canvas() {
       lastNormY = bounded.y;
     };
 
-
-    
     const stopDrawing = () => { 
       if (!drawing || !canvas || !ctx) return;
 
@@ -314,16 +348,18 @@ export default function Canvas() {
     // Socket event handlers
     socket.on("initialCanvas", (history) => {
       if (!canvas || !ctx) return;
-      const scale = window.devicePixelRatio || 1;
-      ctx.clearRect(0, 0, canvas.width / scale, canvas.height / scale);
+      const dpr = window.devicePixelRatio || 1;
+      
+      ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
 
       history.forEach(({ x0, y0, x1, y1, color, size }) => {
-        const rect = canvas.getBoundingClientRect();
+        const cssWidth = canvas.clientWidth;
+        const cssHeight = canvas.clientHeight;
 
-        const cssX0 = x0 * rect.width;
-        const cssY0 = y0 * rect.height;
-        const cssX1 = x1 * rect.width;
-        const cssY1 = y1 * rect.height;
+        const cssX0 = x0 * cssWidth;
+        const cssY0 = y0 * cssHeight;
+        const cssX1 = x1 * cssWidth;
+        const cssY1 = y1 * cssHeight;
 
         ctx.beginPath();
         ctx.moveTo(cssX0, cssY0);
@@ -344,12 +380,14 @@ export default function Canvas() {
 
     socket.on("draw", ({ x0, y0, x1, y1, color, size }) => {
       if (!canvasRef.current || !canvas || !ctx) return;
-      const rect = canvasRef.current.getBoundingClientRect();
+      
+      const cssWidth = canvas.clientWidth;
+      const cssHeight = canvas.clientHeight;
 
-      const cssX0 = x0 * rect.width;
-      const cssY0 = y0 * rect.height;
-      const cssX1 = x1 * rect.width;
-      const cssY1 = y1 * rect.height;
+      const cssX0 = x0 * cssWidth;
+      const cssY0 = y0 * cssHeight;
+      const cssX1 = x1 * cssWidth;
+      const cssY1 = y1 * cssHeight;
 
       ctx.beginPath();
       ctx.moveTo(cssX0, cssY0);
@@ -361,8 +399,8 @@ export default function Canvas() {
 
     socket.on("clear", () => {
       if (!canvas || !ctx) return;
-      const scale = window.devicePixelRatio || 1;
-      ctx.clearRect(0, 0, canvas.width / scale, canvas.height / scale);
+      const dpr = window.devicePixelRatio || 1;
+      ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
       undoStackRef.current = [];
       redoStackRef.current = [];
 
@@ -377,9 +415,9 @@ export default function Canvas() {
       if (!canvas || !ctx) return;
       const img = new Image();
       img.onload = () => {
-        const scale = window.devicePixelRatio || 1;
-        ctx.clearRect(0, 0, canvas.width / scale, canvas.height / scale);
-        ctx.drawImage(img, 0, 0, canvas.width / scale, canvas.height / scale);
+        const dpr = window.devicePixelRatio || 1;
+        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+        ctx.drawImage(img, 0, 0, canvas.width / dpr, canvas.height / dpr);
 
         try {
           undoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)];

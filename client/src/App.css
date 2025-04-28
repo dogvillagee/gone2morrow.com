@@ -28,9 +28,9 @@ html, body {
   flex-direction: column;
   align-items: center;
   padding: 1.5rem;
-  max-width: 1800px; /*max-width */
+  max-width: 1800px;
   margin: 0 auto;
-  width: 100%; /*Ensure app takes full width */
+  width: 100%; 
 }
 
 .header {
@@ -61,7 +61,7 @@ h1 {
   margin-bottom: 1.2rem;
   box-shadow: var(--shadow);
   width: 100%; 
-  max-width: 1600px; /*max-width */
+  max-width: 1600px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -94,21 +94,36 @@ h1 {
 }
 
 .canvas-container {
-  position: relative; /* Needed for absolute positioning */
+  position: relative;
   margin: 0 auto;
   width: 100%; 
-  max-width: 1600px; /*max width */
+  max-width: 1600px;
   box-shadow: var(--shadow);
   border-radius: 8px;
   overflow: hidden;
   background: white;
   border: 2px solid var(--dark);
+  /* Prevent any transitions that might cause rendering issues */
+  transition: none !important;
 }
 
 canvas {
-  max-width: 100%;
-  height: auto; /* Maintain aspect ratio */
-  display: block; /* Remove extra space below canvas */
+  /* These properties help ensure crisp rendering */
+  image-rendering: -moz-crisp-edges;
+  image-rendering: -webkit-crisp-edges;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  width: 100%;
+  height: auto;
+  display: block;
+  /* Prevent any transformations that might cause blur */  
+  transform: translateZ(0);
+  /* Disable anti-aliasing when possible */
+  -webkit-font-smoothing: none;
+  backface-visibility: hidden;
+  /* Remove margin that might cause misalignment */ 
+  margin: 0;
+  padding: 0;
 }
 
 .toolbar {
@@ -136,7 +151,7 @@ canvas {
 
 .toolbar input[type="range"] {
   width: 120px; 
-  accent-color: var(--secondary); /*HERE*/
+  accent-color: var(--dark); /*size slider*/
   cursor: pointer; 
 }
 
@@ -250,6 +265,7 @@ canvas {
 
   .app { 
     padding: 1rem;
+    width: 100%
   }
 
   .toolbar {

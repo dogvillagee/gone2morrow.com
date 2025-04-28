@@ -2,25 +2,26 @@
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 
-//Create socket but don't auto-connect
+// Create socket but don't auto-connect
 const socket = io("http://localhost:4000", { autoConnect: false });
 
 export default function Canvas() {
   const canvasRef = useRef(null);
   const canvasContainerRef = useRef(null);
-  //Create lastEmitTimeRef at component level
   const lastEmitTimeRef = useRef(0);
+  // Store original canvas data
+  const canvasDataRef = useRef(null);
 
-  //Tools & user state
+  // Tools & user state
   const [tool, setTool] = useState("brush");
   const [color, setColor] = useState("#000000");
-  const [size, setSize] = useState(5); //Set a default size
+  const [size, setSize] = useState(5);
   const [username, setUsername] = useState("");
   const [activeUsers, setActiveUsers] = useState({});
-  const [cursorPos, setCursorPos] = useState({ x: -100, y: -100 }); //State for eraser preview position
-  const [tempEraser, setTempEraser] = useState(false); //State for temporary eraser mode (right-click)
+  const [cursorPos, setCursorPos] = useState({ x: -100, y: -100 });
+  const [tempEraser, setTempEraser] = useState(false);
 
-  //Keep latest props in refs for event handlers
+  // Keep latest props in refs for event handlers
   const toolRef = useRef(tool);
   const colorRef = useRef(color);
   const sizeRef = useRef(size);
@@ -33,7 +34,7 @@ export default function Canvas() {
   useEffect(() => { usernameRef.current = username; }, [username]);
   useEffect(() => { tempEraserRef.current = tempEraser; }, [tempEraser]);
 
-  //Undo/redo stacks
+  // Undo/redo stacks
   const undoStackRef = useRef([]);
   const redoStackRef = useRef([]);
 
@@ -51,78 +52,57 @@ export default function Canvas() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
 
-    // Base canvas dimensions (logical size)
+    // Base canvas dimensions - we'll use these as the actual canvas size
     const baseWidth = 1800;
     const baseHeight = 830;
     
-    // Cache for the canvas state during resize
-    let canvasCache = null;
-    
-    //Setup DPI-correct canvas
+    // Setup fixed-size canvas
     const setupCanvas = () => {
       if (!canvasContainerRef.current || !canvas) return;
       
-      // Get the container's display size
+      // Get the container's size
       const containerRect = canvasContainerRef.current.getBoundingClientRect();
       const containerWidth = containerRect.width;
       
-      // Calculate height maintaining the original aspect ratio
+      // Calculate height maintaining aspect ratio
       const aspectRatio = baseHeight / baseWidth;
       const containerHeight = containerWidth * aspectRatio;
 
-      // Save current canvas state if not first setup
-      if (canvas.width > 0 && canvas.height > 0) {
-        try {
-          canvasCache = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        } catch (error) {
-          console.error("Could not cache canvas during resize:", error);
+      // Always use the same internal canvas dimensions
+      if (canvas.width !== baseWidth || canvas.height !== baseHeight) {
+        // Save current content if canvas has been initialized
+        if (canvas.width > 0 && canvas.height > 0 && ctx) {
+          try {
+            canvasDataRef.current = canvas.toDataURL("image/png");
+          } catch (error) {
+            console.error("Could not cache canvas during setup:", error);
+          }
+        }
+
+        // Set fixed canvas dimensions in memory
+        canvas.width = baseWidth;
+        canvas.height = baseHeight;
+        
+        // Set drawing defaults
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = sizeRef.current;
+        ctx.strokeStyle = colorRef.current;
+        
+        // Restore previous content if we had any
+        if (canvasDataRef.current) {
+          const img = new Image();
+          img.onload = () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          };
+          img.src = canvasDataRef.current;
         }
       }
-
-      // Set display size (CSS pixels) - this controls how large the canvas appears
+      
+      // Adjust the display size with CSS only
       canvas.style.width = `${containerWidth}px`;
       canvas.style.height = `${containerHeight}px`;
-
-      // Get device pixel ratio
-      const dpr = window.devicePixelRatio || 1;
-      
-      // Set actual size in memory (scaled for DPI)
-      // This is the resolution of the canvas and should match the display size multiplied by DPR
-      canvas.width = Math.floor(containerWidth * dpr);
-      canvas.height = Math.floor(containerHeight * dpr);
-
-      // Scale the context to match the display size
-      ctx.scale(dpr, dpr);
-      
-      // Set drawing defaults
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.lineWidth = sizeRef.current;
-      ctx.strokeStyle = colorRef.current;
-      
-      // Restore canvas state if we had one
-      if (canvasCache) {
-        // Calculate scaling to maintain aspect ratio
-        const scaleX = containerWidth / (canvasCache.width / dpr);
-        const scaleY = containerHeight / (canvasCache.height / dpr);
-        
-        // Create temporary canvas for proper scaling
-        const tempCanvas = document.createElement('canvas');
-        const tempCtx = tempCanvas.getContext('2d');
-        tempCanvas.width = canvasCache.width;
-        tempCanvas.height = canvasCache.height;
-        tempCtx.putImageData(canvasCache, 0, 0);
-        
-        // Clear and redraw at new size with proper scaling
-        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-        ctx.drawImage(
-          tempCanvas, 
-          0, 0, canvasCache.width, canvasCache.height,
-          0, 0, containerWidth, containerHeight
-        );
-        
-        canvasCache = null;
-      }
     };
 
     setupCanvas();
@@ -133,12 +113,12 @@ export default function Canvas() {
       if (resizeTimeout) clearTimeout(resizeTimeout);
       resizeTimeout = setTimeout(() => {
         setupCanvas();
-      }, 100); // Debounce resize events
+      }, 100);
     };
 
     window.addEventListener("resize", handleResize);
 
-    //Get position in normalized coordinates, handles mouse and touch
+    // Convert display coordinates to canvas coordinates
     const getPos = (e) => {
       if (!canvasRef.current) return { normX: 0, normY: 0, cssX: 0, cssY: 0 };
       const rect = canvasRef.current.getBoundingClientRect();
@@ -158,6 +138,7 @@ export default function Canvas() {
       const cssX = clientX - rect.left;
       const cssY = clientY - rect.top;
 
+      // Convert CSS coordinates to normalized canvas coordinates
       return {
         normX: cssX / rect.width,
         normY: cssY / rect.height,
@@ -166,7 +147,7 @@ export default function Canvas() {
       };
     };
 
-    //Clip coordinates to bounds (0-1)
+    // Clip coordinates to bounds (0-1)
     const clipToBounds = (x, y) => {
       return {
         x: Math.max(0, Math.min(1, x)),
@@ -174,15 +155,17 @@ export default function Canvas() {
       };
     };
 
-    //Eyedropper click handler
+    // Eyedropper click handler
     const handleCanvasClick = (e) => {
       if (toolRef.current !== 'eyedropper' || !canvas || !ctx) return;
 
       const pos = getPos(e);
-      const scale = window.devicePixelRatio || 1;
+      // Convert normalized coordinates to actual canvas pixels
+      const canvasX = Math.floor(pos.normX * canvas.width);
+      const canvasY = Math.floor(pos.normY * canvas.height);
 
       try {
-        const imageData = ctx.getImageData(pos.cssX * scale, pos.cssY * scale, 1, 1).data;
+        const imageData = ctx.getImageData(canvasX, canvasY, 1, 1).data;
         const r = imageData[0];
         const g = imageData[1];
         const b = imageData[2];
@@ -240,7 +223,7 @@ export default function Canvas() {
       ctx.lineWidth = sizeRef.current;
 
       ctx.beginPath();
-      ctx.moveTo(lastNormX * canvas.clientWidth, lastNormY * canvas.clientHeight);
+      ctx.moveTo(lastNormX * canvas.width, lastNormY * canvas.height);
 
       if (socket.connected) {
         socket.emit("setUsername", usernameRef.current);
@@ -286,11 +269,11 @@ export default function Canvas() {
 
       const bounded = clipToBounds(pos.normX, pos.normY);
 
-      ctx.lineTo(bounded.x * canvas.clientWidth, bounded.y * canvas.clientHeight);
+      ctx.lineTo(bounded.x * canvas.width, bounded.y * canvas.height);
       ctx.stroke();
 
       ctx.beginPath();
-      ctx.moveTo(bounded.x * canvas.clientWidth, bounded.y * canvas.clientHeight);
+      ctx.moveTo(bounded.x * canvas.width, bounded.y * canvas.height);
 
       if (socket.connected) {
         socket.emit("draw", {
@@ -322,6 +305,8 @@ export default function Canvas() {
         socket.emit("stopDrawing", { username: usernameRef.current });
 
         try {
+          // Save canvas state after drawing completes
+          canvasDataRef.current = canvas.toDataURL("image/png");
           socket.emit("canvasSnapshot", canvas.toDataURL("image/webp", 0.8));
         } catch (error) {
           console.error("Could not get canvas data URL on stopDrawing:", error);
@@ -348,28 +333,27 @@ export default function Canvas() {
     // Socket event handlers
     socket.on("initialCanvas", (history) => {
       if (!canvas || !ctx) return;
-      const dpr = window.devicePixelRatio || 1;
       
-      ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       history.forEach(({ x0, y0, x1, y1, color, size }) => {
-        const cssWidth = canvas.clientWidth;
-        const cssHeight = canvas.clientHeight;
-
-        const cssX0 = x0 * cssWidth;
-        const cssY0 = y0 * cssHeight;
-        const cssX1 = x1 * cssWidth;
-        const cssY1 = y1 * cssHeight;
+        // Draw directly using normalized coordinates converted to canvas coordinates
+        const canvasX0 = x0 * canvas.width;
+        const canvasY0 = y0 * canvas.height;
+        const canvasX1 = x1 * canvas.width;
+        const canvasY1 = y1 * canvas.height;
 
         ctx.beginPath();
-        ctx.moveTo(cssX0, cssY0);
-        ctx.lineTo(cssX1, cssY1);
+        ctx.moveTo(canvasX0, canvasY0);
+        ctx.lineTo(canvasX1, canvasY1);
         ctx.strokeStyle = color;
         ctx.lineWidth = size;
         ctx.stroke();
       });
 
       try {
+        // Store canvas state after initial load
+        canvasDataRef.current = canvas.toDataURL("image/png");
         undoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)];
         redoStackRef.current = [];
       } catch (error) {
@@ -381,17 +365,15 @@ export default function Canvas() {
     socket.on("draw", ({ x0, y0, x1, y1, color, size }) => {
       if (!canvasRef.current || !canvas || !ctx) return;
       
-      const cssWidth = canvas.clientWidth;
-      const cssHeight = canvas.clientHeight;
-
-      const cssX0 = x0 * cssWidth;
-      const cssY0 = y0 * cssHeight;
-      const cssX1 = x1 * cssWidth;
-      const cssY1 = y1 * cssHeight;
+      // Convert normalized coordinates to actual canvas pixels
+      const canvasX0 = x0 * canvas.width;
+      const canvasY0 = y0 * canvas.height;
+      const canvasX1 = x1 * canvas.width;
+      const canvasY1 = y1 * canvas.height;
 
       ctx.beginPath();
-      ctx.moveTo(cssX0, cssY0);
-      ctx.lineTo(cssX1, cssY1);
+      ctx.moveTo(canvasX0, canvasY0);
+      ctx.lineTo(canvasX1, canvasY1);
       ctx.strokeStyle = color;
       ctx.lineWidth = size;
       ctx.stroke();
@@ -399,10 +381,10 @@ export default function Canvas() {
 
     socket.on("clear", () => {
       if (!canvas || !ctx) return;
-      const dpr = window.devicePixelRatio || 1;
-      ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
       undoStackRef.current = [];
       redoStackRef.current = [];
+      canvasDataRef.current = null;
 
       try {
         undoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
@@ -415,11 +397,12 @@ export default function Canvas() {
       if (!canvas || !ctx) return;
       const img = new Image();
       img.onload = () => {
-        const dpr = window.devicePixelRatio || 1;
-        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-        ctx.drawImage(img, 0, 0, canvas.width / dpr, canvas.height / dpr);
-
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        
         try {
+          // Store the received canvas state
+          canvasDataRef.current = dataURL;
           undoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)];
           redoStackRef.current = [];
         } catch (error) {
@@ -461,6 +444,8 @@ export default function Canvas() {
     const intervalId = setInterval(() => {
       if (socket.connected && canvas) {
         try {
+          // Periodically backup canvas state
+          canvasDataRef.current = canvas.toDataURL("image/png");
           socket.emit("canvasSnapshot", canvas.toDataURL("image/webp", 0.7));
         } catch (error) {
           // Ignore errors for periodic backup
@@ -509,6 +494,10 @@ export default function Canvas() {
             try {
               redoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
               ctx.putImageData(lastState, 0, 0);
+              
+              // Update stored canvas state after undo
+              canvasDataRef.current = canvas.toDataURL("image/png");
+              
               if (socket.connected) {
                 socket.emit("canvasState", canvas.toDataURL("image/webp", 0.8));
               }
@@ -524,6 +513,10 @@ export default function Canvas() {
             try {
               undoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
               ctx.putImageData(nextState, 0, 0);
+              
+              // Update stored canvas state after redo
+              canvasDataRef.current = canvas.toDataURL("image/png");
+              
               if (socket.connected) {
                 socket.emit("canvasState", canvas.toDataURL("image/webp", 0.8));
               }

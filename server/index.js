@@ -1,250 +1,332 @@
-// Original index.js (Server)
+//server/index.js
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
 
 const app = express();
-app.use(cors()); // Enable CORS for all origins
+//Basic CORS setup - allow all origins for development
+app.use(cors({
+    origin: "*", //IMPORTANT restrict this in production change to gone2morrow.com
+    methods: ["GET", "POST"]
+}));
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] }, // Allow all origins for Socket.IO
+  cors: {
+      origin: "*", //Match app's CORS settings
+      methods: ["GET", "POST"]
+  },
 });
 
-// --- In-memory state ---
-const activeUsers = {}; // Stores data about connected users { id: { username, x, y, drawing, lastActive, hasMoved } }
-let drawHistory = [];   // Stores drawing actions { x0, y0, x1, y1, color, size, username }
-let lastCanvasDataURL = null; // Stores the most recent full canvas state as a data URL
-let lastCanvasUpdateTime = Date.now(); // Timestamp of the last canvas update
+// --- In-memory State ---
+const activeUsers = {}; //this feature doesnt work yet,
+// Stores recent drawing actions for new users (if no snapshot) and potential recovery
+let drawHistory = []; // eg { x0, y0, x1, y1, color, size } stored as an array  
 
-// --- Configuration ---
-// testing config below
-const RESET_CONFIG = {
-  hour: 0,           // midnight EST 
-  // testMode: false,    //
-  // testDelayMinutes: 1, //
+//stores the latest full canvas image as a Data URL for quick sync
+let lastCanvasDataURL = null;
+let lastCanvasUpdateTime = Date.now(); // When the snapshot was last updated
+let chatMessages = []; // store messages, username, timestamp
+
+
+const RESET_CONFIG = { //config constant and testing below
+  hour: 0, // Hour (in EST) 0 is midnight
+  // testMode: true, // uncomment fir testing
+  // testDelayMinutes: 1 // uncomment fir testing
 };
-const INACTIVITY_LIMIT = 15 * 1000; // 15 seconds ish
-const MAX_DRAW_HISTORY = 5000; // Max number of draw segments to keep in history 
-const BROADCAST_INTERVAL = 1000; // How often to broadcast user positions (ms)
-const SNAPSHOT_REQUEST_INTERVAL = 15000; // How often to check if a snapshot is needed (ms)
-const SNAPSHOT_STALE_TIME = 30000; // If no snapshot received in this time, request one (ms)
-const HISTORY_PRUNE_INTERVAL = 60000; // How often to prune the draw history (ms)
+const INACTIVITY_LIMIT = 15 * 1000;      // How long until a non-moving user's cursor disappears
+const MAX_DRAW_HISTORY_ON_JOIN = 2000; // Max history points sent if no snapshot
+const MAX_DRAW_HISTORY_MEMORY = 5000;  // Max history points kept in server memory
+const BROADCAST_INTERVAL = 50;         // How often (ms) to send user position updates
+const SNAPSHOT_REQUEST_INTERVAL = 20000; // How often (ms) to check if a new snapshot is needed
+const SNAPSHOT_STALE_TIME = 45000;       // How old (ms) a snapshot can be before requesting a new one
+const HISTORY_PRUNE_INTERVAL = 60000;    // How often (ms) to prune the in-memory draw history
+const MAX_CHAT_HISTORY = 20;             // Max number of chat messages stored/sent on join
 
-// --- Core Functions --
+// --- Core Server Functions ---
 
+// Broadcasts active user positions/status (throttled by BROADCAST_INTERVAL)
 function broadcastActiveUsers() {
   const now = Date.now();
-  const filtered = {}; // Renamed from filteredUsers
+  const filteredUsers = {};
+  // Filter users who have moved and were active recently
   for (const [id, user] of Object.entries(activeUsers)) {
     if (user.hasMoved && now - user.lastActive <= INACTIVITY_LIMIT) {
-      filtered[id] = {
-        username: user.username,
-        x: user.x,
-        y: user.y,
-        drawing: user.drawing,
-      };
+      filteredUsers[id] = { username: user.username, x: user.x, y: user.y, drawing: user.drawing };
     }
   }
-  io.emit("userMouseMove", filtered);
+  io.emit("userMouseMove", filteredUsers); // Send to all clients
 }
-setInterval(broadcastActiveUsers, BROADCAST_INTERVAL); // Use constant
+// Set interval for broadcasting user positions (now more frequent)
+setInterval(broadcastActiveUsers, BROADCAST_INTERVAL);
 
+// Periodically checks if the canvas snapshot is stale and requests a new one if needed
 function requestCanvasSnapshot() {
   const now = Date.now();
-  const activeCount = Object.keys(activeUsers).filter(
+  const activeClientCount = Object.keys(activeUsers).filter(
     id => activeUsers[id].hasMoved && now - activeUsers[id].lastActive <= INACTIVITY_LIMIT
   ).length;
 
-  if ((activeCount > 0 && now - lastCanvasUpdateTime > SNAPSHOT_STALE_TIME) || !lastCanvasDataURL) { 
-    let oldestId = null; //Renamed from oldestActiveUserId
-    let oldestTime = Infinity;
+  // Request if active clients exist AND (snapshot is stale OR no snapshot exists)
+  if ((activeClientCount > 0 && now - lastCanvasUpdateTime > SNAPSHOT_STALE_TIME) || !lastCanvasDataURL) {
+    let mostRecentActiveId = null;
+    let maxLastActiveTime = 0;
+    // Find the most recently active client to request from
     for (const [id, user] of Object.entries(activeUsers)) {
-      
-      if (user.hasMoved && user.lastActive < oldestTime) {
-        oldestId = id;
-        oldestTime = user.lastActive;
+      if (user.hasMoved && user.lastActive > maxLastActiveTime) {
+        mostRecentActiveId = id;
+        maxLastActiveTime = user.lastActive;
       }
     }
-    if (oldestId) io.to(oldestId).emit("requestCanvasSnapshot");
+    // Send request to that specific client
+    if (mostRecentActiveId) {
+      console.log(`Requesting snapshot from user ${mostRecentActiveId}`);
+      io.to(mostRecentActiveId).emit("requestCanvasSnapshot");
+    }
   }
 }
-setInterval(requestCanvasSnapshot, SNAPSHOT_REQUEST_INTERVAL); 
-function pruneDrawHistory() {
-  if (drawHistory.length > MAX_DRAW_HISTORY) { 
-    drawHistory = drawHistory.slice(-MAX_DRAW_HISTORY); //Keep last N items
-  }
-}
-setInterval(pruneDrawHistory, HISTORY_PRUNE_INTERVAL); 
+setInterval(requestCanvasSnapshot, SNAPSHOT_REQUEST_INTERVAL);
 
+// Periodically prunes the in-memory draw history to prevent excessive memory use
+function pruneDrawHistory() {
+  if (drawHistory.length > MAX_DRAW_HISTORY_MEMORY) {
+    console.log(`Pruning draw history from ${drawHistory.length} to ${MAX_DRAW_HISTORY_MEMORY}`);
+    drawHistory = drawHistory.slice(-MAX_DRAW_HISTORY_MEMORY); // Keep only the tail end
+  }
+}
+setInterval(pruneDrawHistory, HISTORY_PRUNE_INTERVAL);
+
+// Clears all canvas state (history, snapshot) and chat, notifies clients
 function clearCanvas() {
+  console.log("Clearing canvas state...");
   drawHistory = [];
   lastCanvasDataURL = null;
-  lastCanvasUpdateTime = Date.now(); //Update time on clear
-  io.emit("clear");
-  console.log("Canvas cleared at", new Date().toLocaleString()); //log format
+  lastCanvasUpdateTime = Date.now();
+  chatMessages = []; // Clear chat too
+  io.emit("clear"); // Notify clients
+  console.log("Canvas cleared at", new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
 }
 
-let resetTimeoutId = null;
-function scheduleReset() {
-    //scheduleReset logic
-    if (resetTimeoutId) clearTimeout(resetTimeoutId);
+// --- Daily Reset Scheduling ---
+let resetTimeoutId = null; // Stores the timeout ID for cancellation
 
+// Schedules the next canvas reset based on EST
+function scheduleReset() {
+    if (resetTimeoutId) clearTimeout(resetTimeoutId); // Clear previous timeout
+
+    // --- Optional Test Mode ---
     if (RESET_CONFIG.testMode && RESET_CONFIG.testDelayMinutes) {
-        const ms = RESET_CONFIG.testDelayMinutes * 60 * 1000;
-        console.log(`TEST MODE: scheduling a canvas wipe in ${RESET_CONFIG.testDelayMinutes} minutes.`);
+        const delayMs = RESET_CONFIG.testDelayMinutes * 60 * 1000;
+        console.log(`TEST MODE: Scheduling wipe in ${RESET_CONFIG.testDelayMinutes} min.`);
         resetTimeoutId = setTimeout(() => {
-        console.log("TEST MODE: performing scheduled canvas wipe now!");
-        clearCanvas();
-        scheduleReset();
-        }, ms);
+            console.log("TEST MODE: Performing wipe!");
+            clearCanvas();
+            scheduleReset(); // Reschedule test
+        }, delayMs);
         return;
     }
+    // --- End Test Mode ---
 
     const now = new Date();
-    const est = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-    const target = new Date(est);
+    const estDate = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+    const targetDate = new Date(estDate); // Target date based on current EST date
 
-    const hour = Math.floor(RESET_CONFIG.hour);
-    const minute = Math.round((RESET_CONFIG.hour - hour) * 60);
-    target.setHours(hour, minute, 0, 0);
+    // Set target time (e.g., midnight EST)
+    targetDate.setHours(RESET_CONFIG.hour, 0, 0, 0); // H:00:00.000
 
-    if (est >= target) {
-        target.setDate(target.getDate() + 1);
+    // If target time already passed today in EST, schedule for tomorrow
+    if (estDate >= targetDate) {
+        targetDate.setDate(targetDate.getDate() + 1);
     }
 
-    const msUntil = target - est;
-    const hrs = Math.floor(msUntil / (1000 * 60 * 60));
-    const mins = Math.floor((msUntil / (1000 * 60)) % 60);
-
+    const msUntilReset = targetDate.getTime() - estDate.getTime(); // Time difference
+    const hoursUntil = Math.floor(msUntilReset / (1000 * 60 * 60));
+    const minutesUntil = Math.floor((msUntilReset / (1000 * 60)) % 60);
     console.log(
-        `Next canvas reset scheduled for ${target.toLocaleString()} EST (in ${hrs}h ${mins}m)` // log format
+        `Next reset: ${targetDate.toLocaleString("en-US", { timeZone: "America/New_York" })} (in ${hoursUntil}h ${minutesUntil}m)`
     );
+
+    // Set the actual timeout
     resetTimeoutId = setTimeout(() => {
+        console.log("Performing scheduled daily wipe...");
         clearCanvas();
-        scheduleReset();
-    }, msUntil);
+        scheduleReset(); // Schedule the *next* day's reset
+    }, msUntilReset);
 }
 
-// --- Socket.IO Connection Handling ---
+// --- Socket.IO Connection Logic ---
 io.on("connection", socket => {
   console.log("User connected:", socket.id);
 
-  //anonymous username assignment
+  // Initialize user data in activeUsers
   activeUsers[socket.id] = {
-    username: "Anonymous", // Set base name, will be updated by client if needed
-    x: 0,
-    y: 0,
-    drawing: false,
-    lastActive: Date.now(),
-    hasMoved: false,
+    username: `Anonymous${Math.floor(Math.random() * 1000)}`, // Assign default name
+    x: 0, y: 0, drawing: false, lastActive: Date.now(), hasMoved: false,
   };
 
-  //Send initial state
+  // --- Send Initial State to New Client ---
+  // Prefer sending snapshot if available
   if (lastCanvasDataURL) {
+    console.log(`Sending snapshot to ${socket.id}`);
     socket.emit("canvasState", lastCanvasDataURL);
   } else {
-    socket.emit("initialCanvas", drawHistory);
+    // Otherwise, send recent history
+    const relevantHistory = drawHistory.slice(-MAX_DRAW_HISTORY_ON_JOIN);
+    console.log(`Sending ${relevantHistory.length} history points to ${socket.id}`);
+    socket.emit("initialCanvas", relevantHistory);
   }
+  // Send recent chat messages
+  socket.emit("chatHistory", chatMessages);
 
-  broadcastActiveUsers(); // Notify about the new/updated user list
+  // Notify others (implicitly includes the new user via broadcast)
+  broadcastActiveUsers();
 
-  // --- Socket Event Handlers ---
+  // --- Socket Event Listeners (for this specific client) ---
 
+  // Client sets their username
   socket.on("setUsername", username => {
-    const u = activeUsers[socket.id];
-    if (u) {
-      u.username = username; // Directly assign username from client
-      u.lastActive = Date.now();
-      broadcastActiveUsers();
+    const user = activeUsers[socket.id];
+    if (user && typeof username === 'string' && username.trim()) {
+      user.username = username.slice(0, 30); // Limit length
+      user.lastActive = Date.now();
+      console.log(`User ${socket.id} is now ${user.username}`);
+      broadcastActiveUsers(); // Update others
     }
   });
 
+  // Client sends mouse/cursor position
   socket.on("mouseMove", data => {
-    const u = activeUsers[socket.id];
-    if (u && data && typeof data.x === 'number' && typeof data.y === 'number') { //Added validation
-      u.x = data.x;
-      u.y = data.y;
-      u.lastActive = Date.now();
-      u.hasMoved = true;
-      //broadcast handled by interval
+    const user = activeUsers[socket.id];
+    if (user && data && typeof data.x === 'number' && typeof data.y === 'number') {
+      user.x = data.x; user.y = data.y; // Update position
+      user.lastActive = Date.now();
+      user.hasMoved = true; // Mark as active
+      // Position is broadcasted via interval timer, not here directly
     }
   });
 
+  // Client starts drawing
   socket.on("startDrawing", data => {
-    const u = activeUsers[socket.id];
-    if (u && data && typeof data.x === 'number' && typeof data.y === 'number') { //Added validation
-      u.drawing = true;
-      u.x = data.x;
-      u.y = data.y;
-      u.lastActive = Date.now();
-      u.hasMoved = true;
-      broadcastActiveUsers(); //Broadcast change in drawing state
+    const user = activeUsers[socket.id];
+    if (user && data && typeof data.x === 'number' && typeof data.y === 'number') {
+      user.drawing = true;
+      user.x = data.x; user.y = data.y; // Update position
+      user.lastActive = Date.now();
+      user.hasMoved = true;
+      console.log(`${user.username} started drawing`);
+      broadcastActiveUsers(); // Broadcast immediately to show drawing status
     }
   });
 
+  // Client sends a drawing segment
   socket.on("draw", data => {
-     //
+     // Basic validation of draw data
      if (data && typeof data.x0 === 'number' && typeof data.y0 === 'number' &&
         typeof data.x1 === 'number' && typeof data.y1 === 'number' &&
         typeof data.color === 'string' && typeof data.size === 'number') {
-        drawHistory.push(data);
-        socket.broadcast.emit("draw", data);
-        const u = activeUsers[socket.id];
-        if (u) {
-            u.x = data.x1;
-            u.y = data.y1;
-            u.lastActive = Date.now();
-            u.hasMoved = true;
-            broadcastActiveUsers(); //code didn't broadcast here
+
+        drawHistory.push(data); // Add to server history
+        socket.broadcast.emit("draw", data); // Send to all *other* clients
+
+        // Update sender's state
+        const user = activeUsers[socket.id];
+        if (user) {
+            user.x = data.x1; user.y = data.y1; // Update position to end of line
+            user.lastActive = Date.now();
+            user.hasMoved = true;
         }
+        // History pruning happens via interval
      } else {
-         console.warn(`Received invalid draw data from ${socket.id}:`, data); // Added warning
+         console.warn(`Invalid draw data from ${socket.id}:`, JSON.stringify(data));
      }
   });
 
+  // Client stops drawing
   socket.on("stopDrawing", () => {
-    const u = activeUsers[socket.id];
-    if (u) {
-      u.drawing = false;
-      u.lastActive = Date.now();
-      broadcastActiveUsers(); // Broadcast change in drawing state
+    const user = activeUsers[socket.id];
+    if (user) {
+      user.drawing = false;
+      user.lastActive = Date.now();
+      console.log(`${user.username} stopped drawing`);
+      broadcastActiveUsers(); // Broadcast status change
     }
   });
 
-  socket.on("canvasState", dataURL => {
-    // Added validation from original file structure
-    if (typeof dataURL === 'string' && dataURL.startsWith("data:image/")) {
-      lastCanvasDataURL = dataURL;
-      lastCanvasUpdateTime = Date.now();
-      socket.broadcast.emit("canvasState", dataURL);
-      // Original code didn't clear history here, snapshot replaces it implicitly on client
-    } else {
-        console.warn(`Received invalid canvas state data from ${socket.id}`); // Added warning
-    }
-  });
-
+  // Client sends a canvas snapshot (usually after drawing or by request)
   socket.on("canvasSnapshot", dataURL => {
-    // Added validation from original file structure
     if (typeof dataURL === 'string' && dataURL.startsWith("data:image/")) {
-      lastCanvasDataURL = dataURL;
+      // console.log(`Received snapshot from ${socket.id}`);
+      lastCanvasDataURL = dataURL; // Update the authoritative snapshot
       lastCanvasUpdateTime = Date.now();
-       // Original code didn't clear history here
+      // Don't usually need to broadcast this, new users will get it on join
     } else {
-        console.warn(`Received invalid canvas snapshot data from ${socket.id}`); // Added warning
+        console.warn(`Invalid snapshot data from ${socket.id}`);
     }
   });
 
-  socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id); // Original log
-    delete activeUsers[socket.id];
-    broadcastActiveUsers();
+  // *** ADDED LISTENER FOR canvasState (Undo/Redo) ***
+  socket.on("canvasState", dataURL => {
+    // Validate the received data URL
+    if (typeof dataURL === 'string' && dataURL.startsWith("data:image/")) {
+        console.log(`Received canvasState update from ${socket.id} (likely undo/redo)`);
+        lastCanvasDataURL = dataURL; // Update the server's authoritative state
+        lastCanvasUpdateTime = Date.now(); // Update timestamp
+
+        // Broadcast this new state to all OTHER clients
+        socket.broadcast.emit("canvasState", dataURL);
+    } else {
+        console.warn(`Received invalid canvasState data from ${socket.id}`);
+    }
+  });
+
+
+  // Client sends a chat message
+  socket.on("sendMessage", (messageData) => {
+    const user = activeUsers[socket.id];
+    // Validate user and message text
+    if (user && messageData && typeof messageData.text === 'string') {
+      const sanitizedText = messageData.text.trim().slice(0, 200); // Trim and limit length
+
+      if (sanitizedText) { // Only process non-empty messages
+          const message = {
+            text: sanitizedText,
+            username: user.username, // Use server-side username
+            timestamp: new Date().toISOString() // Add server timestamp
+          };
+          // Add to chat history and prune if necessary
+          chatMessages.push(message);
+          if (chatMessages.length > MAX_CHAT_HISTORY) {
+            chatMessages = chatMessages.slice(-MAX_CHAT_HISTORY);
+          }
+          // Broadcast message to ALL clients (including sender)
+          io.emit("chatMessage", message);
+          // console.log(`Chat [${user.username}]: ${sanitizedText}`);
+      }
+    } else {
+        console.warn(`Invalid chat data from ${socket.id}:`, messageData);
+    }
+  });
+
+  // Client disconnects
+  socket.on("disconnect", (reason) => {
+    const user = activeUsers[socket.id];
+    const username = user ? user.username : 'Unknown';
+    console.log(`User ${username} (${socket.id}) disconnected: ${reason}`);
+    delete activeUsers[socket.id]; // Remove from active list
+    broadcastActiveUsers(); // Notify others
+  });
+
+  // Handle socket errors
+  socket.on("error", (error) => {
+      console.error(`Socket error (${socket.id}):`, error);
   });
 });
 
-// --- Start Server ---
-server.listen(4000, () => {
-  console.log("Server running on http://localhost:4000"); // Original log
-  scheduleReset(); // Start the reset schedule
+// --- Start the HTTP Server ---
+const PORT = process.env.PORT || 4000;
+server.listen(PORT, () => {
+  console.log(`Server listening on http://localhost:${PORT}`);
+  // Schedule the first canvas reset when server starts
+  scheduleReset();
 });

@@ -59,10 +59,13 @@ function App() {
   }, []);
 
   return (
+    <>
+    <div className="animated-background"></div>
     <div className="app">
       <div className="header">
+        
         <h1>gone2morrow</h1>
-        <p className="tagline">Everyone Shares One Canvas. Create Or Destroy 😯 Nothing Lasts Forever!</p>
+        <p className="tagline">One Shared Canvas. Create Or Destroy. Nothing Lasts Forever!</p>
       </div>
 
       <div className="info-box">
@@ -82,6 +85,7 @@ function App() {
         &copy; {new Date().getFullYear()} gone2morrow
       </div>
     </div>
+    </>
   );
 }
 

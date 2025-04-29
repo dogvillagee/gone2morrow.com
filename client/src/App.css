@@ -9,18 +9,53 @@
 :root {
   --primary: #ffffff;
   --secondary: #000000;
-  --light: #b0d3db;
-  --dark: #000000;
-  --shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  --shadow: 0 4px 8px rgba(0, 0, 0,);
 }
 
 html, body {
   height: 100%;
-  font-family: 'Quicksand', sans-serif;
-  background: /*var(--light) change this back maybe later */  url('g2mlogo.png');
-  background-size: cover;
-  color: var(--dark);
+  font-family: "Sixtyfour", sans-serif;
+  /*background:   url('p1.png'); */
+  /*background-size: cover;*/
+  color: var(--secondary);
   overflow-x: hidden;
+}
+
+
+
+
+@keyframes colorshift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+
+.animated-background {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  
+ 
+  background: linear-gradient(
+    135deg,
+    yellow, Firebrick, Royalblue, green, palegreen
+  );
+  
+  /* can change this maybe*/
+  background-size: 200% 200%;
+  
+  
+  animation: colorshift 30s linear infinite;  /* 30second total animation*/
 }
 
 .app {
@@ -31,31 +66,35 @@ html, body {
   max-width: 1800px;
   margin: 0 auto;
   width: 100%; 
+
 }
 
 .header {
   text-align: center;
   margin-bottom: 1.5rem;
   width: 100%;
+  
 }
 
 h1 {
-  font-family: 'Permanent Marker'; 
+  font-family: "Sixtyfour", sans-serif;
+
   font-weight: bold; 
-  font-size: 2.5rem;
-  margin-bottom: 0.5rem;
-  color: var(--secondary);
+  font-size: 3.0rem;
+  margin-bottom: 1.0rem;
+  color: #000000;
+  
 }
 
 .tagline {
   font-size: 1.1rem;
-  font-weight: 500;
+  font-weight: 800;
   color: var(--secondary);
   margin-bottom: 1rem;
 }
 
 .info-box {
-  background: rgb(255, 255, 255);
+  background: white;
   border-radius: 8px;
   padding: 0.8rem 1.2rem;
   margin-bottom: 1.2rem;
@@ -73,19 +112,19 @@ h1 {
 .shortcut-tip {
   display: flex;
   align-items: center;
-  font-size: 0.9rem;
+  font-size: 0.8.5rem; /*.5 because otherwise its weirdly spaced <>_<>*/
   color: #000000;
   flex-wrap: wrap;
   gap: 3px;
 }
 
 .shortcut-tip kbd {
-  background: var(--dark);
+  background: var(--secondary);
   color: white;
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 0.8rem;
-  box-shadow: 1px 1px 1px rgba(32, 15, 15, 0.2);
+  box-shadow: 1px 1px 1px rgba(0, 0, 0, 0.5);
 }
 
 .countdown {
@@ -102,7 +141,7 @@ h1 {
   border-radius: 8px;
   overflow: hidden;
   background: white;
-  border: 2px solid var(--dark);
+  border: 2px solid var(--secondary);
   /* Prevent any transitions that might cause rendering issues */
   transition: none !important;
 }
@@ -151,7 +190,7 @@ canvas {
 
 .toolbar input[type="range"] {
   width: 120px; 
-  accent-color: var(--dark); /*size slider*/
+  accent-color: var(--secondary); /*size slider*/
   cursor: pointer; 
 }
 
@@ -186,9 +225,9 @@ canvas {
   color: rgb(0, 0, 0); 
   cursor: pointer;
   border-radius: 4px;
-  font-weight: 600;
+  font-weight: 1000;
   transition: all 0.2s;
-  font-family: 'Quicksand', sans-serif;
+  font-family: "Sixtyfour", sans-serif;
   font-size: 1rem; 
   line-height: 1.2; /* Adjust line height if needed */
   min-width: 40px; 
@@ -228,7 +267,7 @@ canvas {
   padding: 3px 8px; 
   border-radius: 12px; 
   font-size: 12px; 
-  font-weight: 500;
+  font-weight: 600;
   white-space: nowrap;
   pointer-events: none;
   box-shadow: 0 2px 4px rgba(0,0,0,0.2); 

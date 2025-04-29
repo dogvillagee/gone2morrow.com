@@ -1,0 +1,172 @@
+/*src/chatbox.css*/
+
+
+:root {
+  --dark: #0c0c0c;
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  --font-family: "Jersey 25", sans-serif;
+}
+
+.chatbox-container {
+  position: fixed; 
+  bottom: 0;       /*Align to bottom*/
+  right: 20px;     /*Offset from right edge*/
+  width: 350px;    
+  background: white;
+  border-radius: 8px 8px 0 0; /*Rounded top corners*/
+  box-shadow: var(--shadow);  
+  z-index: 1000;   /* above everything */
+  transition: height 0.3s ease, max-height 0.3s ease; /*Smooth transitions*/
+  max-height: 350px; 
+  display: flex;
+  flex-direction: column; 
+  overflow: hidden; /*hide content when closed*/
+  font-family: var(--font-family); 
+}
+
+.chatbox-container.closed {
+  height: 40px; 
+  max-height: 40px;
+}
+
+.chatbox-container.open {
+  height: 550px; 
+  max-height: 550px;
+}
+
+.chatbox-header {
+  background: var(--dark);
+  color: white;
+  padding: 10px;
+  border-radius: 8px 8px 0 0; /*Match container rounding*/
+  font-weight: 400;
+  cursor: pointer; /*Indicate it's clickable*/
+  text-align: center;
+  flex-shrink: 0; /*prevent header from shrinking*/
+  font-size: 1.2rem;
+}
+.chat-warning {
+  background: #fff3cd; 
+  color: #6e5509;
+  padding: 8px;
+  font-size: 1.4rem;
+  text-align: center;
+  border-bottom: 1px solid #ffe69c; /*subtle border*/
+  flex-shrink: 0; /*prevent shrinking*/
+}
+
+.messages-container {
+  flex: 1; /*Take up remaining space */
+  overflow-y: auto; /*Enable vertical scrolling */
+  padding: 10px;
+  display: flex;
+  flex-direction: column; 
+  gap: 8px; 
+  background: #f9f9f9; 
+}
+
+
+.message {
+  padding: 6px 10px; 
+  border-radius: 6px; /* Rounded corners */
+  background: white;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08); /* Softer shadow */
+  word-break: break-word; /* Prevent long words from overflowing */
+  font-size: 1.2rem;
+  animation: fadeIn 0.3s ease-out; /* Fade-in animation */
+  max-width: 95%; /* messages take 95% width */
+  align-self: flex-start; 
+}
+
+.message-username {
+  font-weight: 800;
+  color: var(--dark);
+  margin-right: 5px; 
+}
+
+
+.message-text {
+  color: black;
+}
+
+.message-time {
+  font-size: 0.75em;
+  color: gray;
+  white-space: nowrap; /*prevent timestamp from wrapping*/
+  margin-left: auto;
+  padding-left: 5px; 
+
+}
+.chat-input-form {
+  display: flex; /*align input and button horizontally*/
+  padding: 8px;
+  gap: 5px; 
+  border-top: 1px solid #eee; /* Separator line */
+  background: white;
+  flex-shrink: 0; /* Prevent form from shrinking */
+}
+
+/* Input field styles */
+.chat-input-form input {
+  flex: 1; /* Take available horizontal space */
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-family: var(--font-family);
+  font-size: 1.2rem;
+}
+
+/* Send button styles */
+.chat-input-form button {
+  padding: 8px 12px;
+  background: var(--dark);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 250;
+  font-family: var(--font-family);
+  transition: background-color 0.2s ease; /* Smooth hover effect */
+  font-size: 1.2rem;
+}
+
+/* Button hover effect */
+.chat-input-form button:hover:not(:disabled) {
+  background-color: gray; 
+}
+
+/* Styles for disabled button */
+.chat-input-form button:disabled {
+    background-color: gray;
+    cursor: not-allowed;
+}
+
+
+/* Fade-in animation keyframes */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 800px) {
+  .chatbox-container {
+    width: 95%; 
+    right: 2.5%; 
+    max-height: 350px; 
+  }
+
+  .chatbox-container.open {
+    height: 350px; 
+  }
+}
+
+@media (max-width: 400px) {
+    .chatbox-container {
+        width: 100%; 
+        right: 0;
+        border-radius: 0; 
+    }
+    .chatbox-header {
+        border-radius: 0;
+    }
+}

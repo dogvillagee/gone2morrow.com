@@ -48,7 +48,7 @@ html, body {
  
   background: linear-gradient(
     135deg,
-    yellow, Firebrick, Royalblue, green, darkgreen
+    yellow, Firebrick, Royalblue, green, rgb(229, 231, 229)
   );
   
   /* can change this maybe*/
@@ -281,7 +281,7 @@ canvas {
 .footer {
   margin-top: 1.5rem; 
   text-align: center;
-  font-size: 0.8rem; 
+  font-size: 0.1.5rem; 
   color: #000000;
   width: 100%;
 }

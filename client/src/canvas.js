@@ -4,8 +4,10 @@ import { io } from "socket.io-client";
 import Chatbox from "./chatbox";
 import { v4 as uuidv4 } from 'uuid'; // Import UUID library
 
-//Create socket but don't auto-connect initially
-const socket = io("http://localhost:4000", { autoConnect: false });
+
+//updated for live server
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:4000";
+const socket = io(BACKEND_URL, { autoConnect: false });
 
 export default function Canvas() {
   const canvasRef = useRef(null);
@@ -265,7 +267,7 @@ export default function Canvas() {
     let lastNormX = 0, lastNormY = 0;
     let isRightClick = false;
 
-    // --- MODIFIED: startDrawing ---
+    //mod startDrawing
     const startDrawing = (e) => {
       if (e.touches) e.preventDefault();
       if (!canvas || !ctx) return;
@@ -298,7 +300,7 @@ export default function Canvas() {
       }
     };
 
-    // --- MODIFIED: draw ---
+    //mod draw
     const draw = (e) => {
       if (e.touches) e.preventDefault();
       if (!canvas || !ctx) return;
@@ -358,13 +360,13 @@ export default function Canvas() {
         // Emit stopDrawing for cursor update
         socket.emit("stopDrawing", { username: usernameRef.current });
 
-        // --- NEW: Send the completed stroke to the server ---
+        
         if (currentStrokeIdRef.current && currentSegmentsRef.current.length > 0) {
             socket.emit("addStroke", {
                 id: currentStrokeIdRef.current,
                 segments: currentSegmentsRef.current
             });
-            console.log(`Sent stroke ${currentStrokeIdRef.current} with ${currentSegmentsRef.current.length} segments`);
+            console.log(`Sent stroke ${currentStrokeIdRef.current} with ${currentSegmentsRef.current.length} segments`); //then send the completed stroke to the server
         }
 
         
@@ -376,7 +378,7 @@ export default function Canvas() {
         setTimeout(() => {
             if (!canvas) return; //Check if canvas still exists
             try {
-                const snapshotDataUrl = canvas.toDataURL("image/webp", 0.8); // Use webp for smaller size
+                const snapshotDataUrl = canvas.toDataURL("image/webp", 0.8); //Using webp for smaller size
                 canvasDataRef.current = canvas.toDataURL("image/png"); // Update local png cache too
                 socket.emit("canvasSnapshot", snapshotDataUrl); // Send snapshot
             } catch (error) {
@@ -448,7 +450,7 @@ export default function Canvas() {
         // Update local snapshot reference
         canvasDataRef.current = dataURL; // Use the received URL directly for consistency
         console.log("Canvas updated from snapshot.");
-        // --- REMOVED: Resetting local undo stack ---
+        //Resetting local undo stack
       };
       img.onerror = (err) => {
           console.error("Failed to load canvas state image:", err);
@@ -462,7 +464,7 @@ export default function Canvas() {
     });
 
 
-    // --- RE-ADDED: Listener for individual 'draw' segments (live preview) ---
+    //Listener for individual 'draw' segments (live preview)
     socket.on("draw", (segmentData) => {
         if (!canvas || !ctx || drawing) return; // Don't draw own previews
         const { x0, y0, x1, y1, color, size } = segmentData;
@@ -491,7 +493,7 @@ export default function Canvas() {
         ctx.beginPath(); // Reset path
     });
 
-    // --- Listener for completed strokes from others (now mainly for history update) ---
+    //Listener for completed strokes from others for history draw updating
     socket.on("newStroke", (stroke) => {
         if (!stroke || !Array.isArray(stroke.segments)) return;
         console.log(`Received new stroke ${stroke.id} from user ${stroke.userId} (for history)`);
@@ -501,7 +503,7 @@ export default function Canvas() {
         if (!drawHistoryRef.current.some(s => s.id === stroke.id)) {
             drawHistoryRef.current.push(stroke);
         }
-        // Don't redraw here, rely on live segments and snapshots/redrawCanvas for visuals
+        
     });
 
 
@@ -512,10 +514,10 @@ export default function Canvas() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = "#FFFFFF";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      canvasDataRef.current = null; // Clear local snapshot
-      drawHistoryRef.current = []; // Clear local history (of strokes)
-      initialStateLoaded = true; // Mark state as loaded (empty)
-      // --- REMOVED: Resetting local undo stack ---
+      canvasDataRef.current = null; //Clear local snapshot
+      drawHistoryRef.current = []; //Clear local history (of strokes)
+      initialStateLoaded = true; //mark state as loaded (empty)
+      //Resetting local undo stack
     });
 
     // ... (userMouseMove, requestCanvasSnapshot remain the same)
@@ -582,7 +584,7 @@ export default function Canvas() {
   }, [username, redrawCanvasFromHistory]); // Added redrawCanvasFromHistory dependency
 
 
-  // --- MODIFIED: Undo/redo handling effect (emits events to server) ---
+  //mod Undo/redo handling effect (emits events to server)
   useEffect(() => {
     let isUndoRedoKeyDown = false; // Flag to track if Ctrl+Z/Y is already down
 

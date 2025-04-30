@@ -3,6 +3,7 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
+const { v4: uuidv4 } = require('uuid'); //Import UUID library
 
 const app = express();
 //Basic CORS setup - allow all origins for development
@@ -17,12 +18,16 @@ const io = new Server(server, {
       origin: "*", //Match app's CORS settings
       methods: ["GET", "POST"]
   },
+  //Consider increasing if strokes/snapshots are large
+  //maxHttpBufferSize: 1e8 // 100 MB
 });
 
-// --- In-memory State ---
+//In-memory State
 const activeUsers = {}; //this feature doesnt work yet,
-// Stores recent drawing actions for new users (if no snapshot) and potential recovery
-let drawHistory = []; // eg { x0, y0, x1, y1, color, size } stored as an array  
+
+//mod Stores history of strokes, including userId and undone status
+// Each stroke: { id: string, userId: string, segments: [ {x0,y0,x1,y1,color,size}, ... ], undone: boolean }
+let drawHistory = []; // Stores strokes now, not individual segments
 
 //stores the latest full canvas image as a Data URL for quick sync
 let lastCanvasDataURL = null;
@@ -35,16 +40,25 @@ const RESET_CONFIG = { //config constant and testing below
   // testMode: true, // uncomment fir testing
   // testDelayMinutes: 1 // uncomment fir testing
 };
-const INACTIVITY_LIMIT = 15 * 1000;      // How long until a non-moving user's cursor disappears
-const MAX_DRAW_HISTORY_ON_JOIN = 2000; // Max history points sent if no snapshot
-const MAX_DRAW_HISTORY_MEMORY = 5000;  // Max history points kept in server memory
-const BROADCAST_INTERVAL = 50;         // How often (ms) to send user position updates
-const SNAPSHOT_REQUEST_INTERVAL = 20000; // How often (ms) to check if a new snapshot is needed
-const SNAPSHOT_STALE_TIME = 45000;       // How old (ms) a snapshot can be before requesting a new one
-const HISTORY_PRUNE_INTERVAL = 60000;    // How often (ms) to prune the in-memory draw history
-const MAX_CHAT_HISTORY = 20;             // Max number of chat messages stored/sent on join
+const INACTIVITY_LIMIT = 15 * 1000;      //How long until a non-moving user's cursor disappears
+const MAX_DRAW_HISTORY_MEMORY = 5000;  //Max *strokes* kept in server memory
+const BROADCAST_INTERVAL = 50;         //How often (ms) to send user position updates
+const SNAPSHOT_REQUEST_INTERVAL = 20000; //How often (ms) to check if a new snapshot is needed
+const SNAPSHOT_STALE_TIME = 45000;       //How old (ms) a snapshot can be before requesting a new one
+const HISTORY_PRUNE_INTERVAL = 60000;    //How often (ms) to prune the in-memory draw history
+const MAX_CHAT_HISTORY = 20;             //Max number of chat messages stored/sent on join
 
-// --- Core Server Functions ---
+
+//Function to broadcast redraw command based on history 
+function broadcastRedraw() {
+    //Send the full history of strokes. Clients will redraw based on this.
+    io.emit("redrawCanvas", drawHistory);
+    console.log(`Broadcasting redraw command with ${drawHistory.length} strokes.`);
+    //Clear the snapshot after undo/redo as it's now potentially invalid
+    //Clients will need to send a new one if they are the source of truth
+    lastCanvasDataURL = null;
+    lastCanvasUpdateTime = Date.now(); // Reset update time
+}
 
 // Broadcasts active user positions/status (throttled by BROADCAST_INTERVAL)
 function broadcastActiveUsers() {
@@ -91,7 +105,7 @@ setInterval(requestCanvasSnapshot, SNAPSHOT_REQUEST_INTERVAL);
 // Periodically prunes the in-memory draw history to prevent excessive memory use
 function pruneDrawHistory() {
   if (drawHistory.length > MAX_DRAW_HISTORY_MEMORY) {
-    console.log(`Pruning draw history from ${drawHistory.length} to ${MAX_DRAW_HISTORY_MEMORY}`);
+    console.log(`Pruning draw history from ${drawHistory.length} to ${MAX_DRAW_HISTORY_MEMORY} strokes`);
     drawHistory = drawHistory.slice(-MAX_DRAW_HISTORY_MEMORY); // Keep only the tail end
   }
 }
@@ -100,7 +114,7 @@ setInterval(pruneDrawHistory, HISTORY_PRUNE_INTERVAL);
 // Clears all canvas state (history, snapshot) and chat, notifies clients
 function clearCanvas() {
   console.log("Clearing canvas state...");
-  drawHistory = [];
+  drawHistory = []; // Clear stroke history
   lastCanvasDataURL = null;
   lastCanvasUpdateTime = Date.now();
   chatMessages = []; // Clear chat too
@@ -108,7 +122,7 @@ function clearCanvas() {
   console.log("Canvas cleared at", new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
 }
 
-// --- Daily Reset Scheduling ---
+//Daily Reset Scheduling
 let resetTimeoutId = null; // Stores the timeout ID for cancellation
 
 // Schedules the next canvas reset based on EST
@@ -166,17 +180,16 @@ io.on("connection", socket => {
   };
 
   // --- Send Initial State to New Client ---
-  // Prefer sending snapshot if available
+  // 1. Prefer sending snapshot if available
   if (lastCanvasDataURL) {
     console.log(`Sending snapshot to ${socket.id}`);
     socket.emit("canvasState", lastCanvasDataURL);
   } else {
-    // Otherwise, send recent history
-    const relevantHistory = drawHistory.slice(-MAX_DRAW_HISTORY_ON_JOIN);
-    console.log(`Sending ${relevantHistory.length} history points to ${socket.id}`);
-    socket.emit("initialCanvas", relevantHistory);
+    // 2. Otherwise, send stroke history (client redraws from this)
+    console.log(`No snapshot, sending ${drawHistory.length} history strokes to ${socket.id}`);
+    socket.emit("initialHistory", drawHistory); // Use a distinct event name
   }
-  // Send recent chat messages
+  // 3. Send recent chat messages
   socket.emit("chatHistory", chatMessages);
 
   // Notify others (implicitly includes the new user via broadcast)
@@ -219,27 +232,47 @@ io.on("connection", socket => {
     }
   });
 
-  // Client sends a drawing segment
+  // --- RE-ADDED: Listener for individual drawing segments (for live preview) ---
   socket.on("draw", data => {
      // Basic validation of draw data
      if (data && typeof data.x0 === 'number' && typeof data.y0 === 'number' &&
         typeof data.x1 === 'number' && typeof data.y1 === 'number' &&
         typeof data.color === 'string' && typeof data.size === 'number') {
 
-        drawHistory.push(data); // Add to server history
-        socket.broadcast.emit("draw", data); // Send to all *other* clients
+        // Just broadcast this segment to others for live preview
+        socket.broadcast.emit("draw", data);
 
-        // Update sender's state
+        // Update sender's state (needed for cursor position)
         const user = activeUsers[socket.id];
         if (user) {
             user.x = data.x1; user.y = data.y1; // Update position to end of line
             user.lastActive = Date.now();
             user.hasMoved = true;
         }
-        // History pruning happens via interval
+        // DO NOT add individual segments to the main drawHistory here
      } else {
          console.warn(`Invalid draw data from ${socket.id}:`, JSON.stringify(data));
      }
+  });
+
+  // --- NEW: Listener for completed strokes from client ---
+  socket.on("addStroke", (strokeData) => {
+      // Validate stroke data
+      if (strokeData && strokeData.id && Array.isArray(strokeData.segments) && strokeData.segments.length > 0) {
+          // Add userId and undone status
+          const completeStroke = {
+              ...strokeData,
+              userId: socket.id, // Tag with the user who sent it
+              undone: false
+          };
+          // Add the complete stroke to history
+          drawHistory.push(completeStroke);
+          console.log(`Added stroke ${completeStroke.id} from user ${socket.id}`);
+          // Do NOT broadcast the stroke itself here, rely on snapshot + redrawCanvas for sync
+          // Pruning happens via interval
+      } else {
+          console.warn(`Received invalid stroke data from ${socket.id}:`, strokeData);
+      }
   });
 
   // Client stops drawing
@@ -250,6 +283,7 @@ io.on("connection", socket => {
       user.lastActive = Date.now();
       console.log(`${user.username} stopped drawing`);
       broadcastActiveUsers(); // Broadcast status change
+      // Client now sends stroke via "addStroke" and snapshot via "canvasSnapshot"
     }
   });
 
@@ -265,20 +299,49 @@ io.on("connection", socket => {
     }
   });
 
-  // *** ADDED LISTENER FOR canvasState (Undo/Redo) ***
-  socket.on("canvasState", dataURL => {
-    // Validate the received data URL
-    if (typeof dataURL === 'string' && dataURL.startsWith("data:image/")) {
-        console.log(`Received canvasState update from ${socket.id} (likely undo/redo)`);
-        lastCanvasDataURL = dataURL; // Update the server's authoritative state
-        lastCanvasUpdateTime = Date.now(); // Update timestamp
+  // --- NEW: Per-User Undo Logic ---
+  socket.on("undo", () => {
+      const userId = socket.id;
+      let strokeIndexToUndo = -1;
+      // Find the latest stroke by this user that is NOT undone
+      for (let i = drawHistory.length - 1; i >= 0; i--) {
+          if (drawHistory[i].userId === userId && !drawHistory[i].undone) {
+              strokeIndexToUndo = i;
+              break;
+          }
+      }
 
-        // Broadcast this new state to all OTHER clients
-        socket.broadcast.emit("canvasState", dataURL);
-    } else {
-        console.warn(`Received invalid canvasState data from ${socket.id}`);
-    }
+      if (strokeIndexToUndo !== -1) {
+          drawHistory[strokeIndexToUndo].undone = true; // Mark as undone
+          console.log(`User ${userId} undid stroke ${drawHistory[strokeIndexToUndo].id}`);
+          broadcastRedraw(); // Tell all clients to redraw from history
+      } else {
+          console.log(`No active stroke found for user ${userId} to undo.`);
+      }
   });
+
+  // --- NEW: Per-User Redo Logic ---
+  socket.on("redo", () => {
+      const userId = socket.id;
+      let strokeIndexToRedo = -1;
+      // Find the latest stroke by this user that IS undone
+      for (let i = drawHistory.length - 1; i >= 0; i--) {
+          if (drawHistory[i].userId === userId && drawHistory[i].undone) {
+              strokeIndexToRedo = i;
+              break;
+          }
+      }
+
+      if (strokeIndexToRedo !== -1) {
+          drawHistory[strokeIndexToRedo].undone = false; // Mark as not undone
+          console.log(`User ${userId} redid stroke ${drawHistory[strokeIndexToRedo].id}`);
+          broadcastRedraw(); // Tell all clients to redraw from history
+      } else {
+          console.log(`No undone stroke found for user ${userId} to redo.`);
+      }
+  });
+
+  // --- REMOVED: Old canvasState listener for broadcasting client undo/redo ---
 
 
   // Client sends a chat message

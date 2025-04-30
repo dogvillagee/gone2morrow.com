@@ -1,7 +1,8 @@
-// src/canvas.js
-import { useEffect, useRef, useState } from "react";
+//src/canvas.js
+import { useEffect, useRef, useState, useCallback } from "react"; // Added useCallback
 import { io } from "socket.io-client";
 import Chatbox from "./chatbox";
+import { v4 as uuidv4 } from 'uuid'; // Import UUID library
 
 //Create socket but don't auto-connect initially
 const socket = io("http://localhost:4000", { autoConnect: false });
@@ -31,8 +32,12 @@ export default function Canvas() {
   useEffect(() => { usernameRef.current = username; }, [username]);
   useEffect(() => { tempEraserRef.current = tempEraser; }, [tempEraser]);
 
-  const undoStackRef = useRef([]); //undo stack
-  const redoStackRef = useRef([]); //redo stack
+
+
+  //FIXXED Refs for managing current stroke and history
+  const drawHistoryRef = useRef([]); //Stores stroke history from server
+  const currentStrokeIdRef = useRef(null); //Id of current 
+  const currentSegmentsRef = useRef([]); //for ordered undo/redo 
 
   //Username name generation / and name save state
   useEffect(() => {
@@ -44,8 +49,7 @@ export default function Canvas() {
       setUsername(storedUsername);
       console.log("Retrieved username from localStorage:", storedUsername);
     } else {
-      //If not found, generate a new one
-      const id = Math.floor(Math.random() * 1000);
+      const id = Math.floor(Math.random() * 1000); //random anonymous(x) username between 1-1000
       const newUsername = `Anonymous${id}`;
       setUsername(newUsername);
       //Save the new username to localStorage
@@ -54,6 +58,70 @@ export default function Canvas() {
     }
     //eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  //redraw canvas from stroke history.
+  const redrawCanvasFromHistory = useCallback((strokeHistory) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    console.log(`Redrawing canvas from ${strokeHistory?.length ?? 0} strokes.`);
+
+    //Clear the canvas completely
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#FFFFFF"; // Assuming white background
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (!strokeHistory || strokeHistory.length === 0) {
+        console.log("Stroke history empty, canvas cleared.");
+        //update local snapshot after clearing/redrawing
+        try {
+           canvasDataRef.current = canvas.toDataURL("image/png");
+        } catch(e){ console.warn("Could not update snapshot after history clear"); }
+        return; //Nothing more to draw
+    }
+
+    // Store original settings to restore after drawing
+    const originalStrokeStyle = ctx.strokeStyle;
+    const originalLineWidth = ctx.lineWidth;
+    const originalLineCap = ctx.lineCap;
+    const originalLineJoin = ctx.lineJoin;
+
+    ctx.lineCap = "round"; // Ensure consistency
+    ctx.lineJoin = "round";
+
+    //Iterate through the strokes in the history
+    strokeHistory.forEach(stroke => {
+        // Check if the stroke object exists and is not marked as undone
+        if (stroke && !stroke.undone && Array.isArray(stroke.segments)) {
+            // Iterate through the segments within this valid stroke
+            stroke.segments.forEach(segment => {
+                const { x0, y0, x1, y1, color, size } = segment;
+                ctx.beginPath();
+                ctx.moveTo(x0 * canvas.width, y0 * canvas.height);
+                ctx.lineTo(x1 * canvas.width, y1 * canvas.height);
+                ctx.strokeStyle = color;
+                ctx.lineWidth = size;
+                ctx.stroke();
+            });
+        }
+    });
+
+    //Restore original context settings
+    ctx.strokeStyle = originalStrokeStyle;
+    ctx.lineWidth = originalLineWidth;
+    ctx.lineCap = originalLineCap;
+    ctx.lineJoin = originalLineJoin;
+    ctx.beginPath(); //reset path after drawing history
+
+    //Update local snapshot after redrawing from history
+    try {
+       canvasDataRef.current = canvas.toDataURL("image/png");
+       console.log("Canvas redraw complete from history, snapshot updated.");
+    } catch(e){ console.warn("Could not update snapshot after history redraw"); }
+  }, []); // useCallback ensures this function reference is stable
+
 
   //main Canvas and Socket setup effect
   useEffect(() => {
@@ -66,6 +134,9 @@ export default function Canvas() {
     const baseWidth = 1800;
     const baseHeight = 830;
 
+    //Flag to indicate if initial state (snapshot or history) has been loaded
+    let initialStateLoaded = false;
+
     const setupCanvas = () => {
       if (!canvasContainerRef.current || !canvas) return;
       const containerRect = canvasContainerRef.current.getBoundingClientRect();
@@ -73,59 +144,75 @@ export default function Canvas() {
       const aspectRatio = baseHeight / baseWidth;
       const containerHeight = containerWidth * aspectRatio;
 
-      if (canvas.width !== baseWidth || canvas.height !== baseHeight) {
-        if (canvas.width > 0 && canvas.height > 0 && ctx) {
-          try {
-            canvasDataRef.current = canvas.toDataURL("image/png");
-          } catch (error) {
-            console.warn("Could not cache canvas during setup:", error.message);
-          }
+      //Check if dimensions changed significantly OR if canvas hasn't been initialized yet
+      const needsResize = canvas.width !== baseWidth || canvas.height !== baseHeight;
+
+      if (needsResize) {
+        //Store current snapshot before resizing (if available) - Similar to original logic
+        let previousDataUrl = null;
+        if (canvas.width > 0 && canvas.height > 0) {
+            try {
+                //use the locally cached snapshot if available
+                previousDataUrl = canvasDataRef.current || canvas.toDataURL("image/png");
+            } catch (error) {
+                console.warn("Could not cache canvas during resize setup:", error.message);
+            }
         }
+
+        //Set new internal dimensions
         canvas.width = baseWidth;
         canvas.height = baseHeight;
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
-        ctx.lineWidth = sizeRef.current;
-        ctx.strokeStyle = colorRef.current;
+        ctx.lineWidth = sizeRef.current; //Use current size setting
+        ctx.strokeStyle = colorRef.current; //Use current color setting
 
-        if (canvasDataRef.current) {
+        //Restore previous image OR the last known snapshot from server/local cache
+        const restoreUrl = previousDataUrl; //Prioritize the one just saved before resize
+        if (restoreUrl) {
           const img = new Image();
           img.onload = () => {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            //Initialize undo stack after restoring initial image
-            try {
-                undoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)];
-                redoStackRef.current = [];
-            } catch(e) { console.error("Error init undo stack on restore:", e); undoStackRef.current = []; }
+            console.log("Canvas restored from snapshot after resize.");
+            //Update canvasDataRef just in case the restored one was from canvas.toDataURL
+            canvasDataRef.current = restoreUrl;
           };
-          img.src = canvasDataRef.current;
+          img.onerror = () => { // Fallback if image fails to load
+              console.warn("Failed to load snapshot on resize, clearing canvas.");
+              ctx.clearRect(0, 0, canvas.width, canvas.height);
+              ctx.fillStyle = "#FFFFFF";
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+              canvasDataRef.current = null; // Clear ref if restore failed
+          }
+          img.src = restoreUrl;
         } else {
+            //If no snapshot available, clear to white
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.fillStyle = "#FFFFFF";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            //Initialize undo stack with blank state
-             try {
-                undoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)];
-                redoStackRef.current = [];
-            } catch(e) { console.error("Error init undo stack on blank:", e); undoStackRef.current = []; }
+            console.log("No snapshot, cleared canvas after resize.");
+            canvasDataRef.current = null; // Ensure ref is cleared
         }
       }
+
+      //Apply CSS dimensions for scaling
       canvas.style.width = `${containerWidth}px`;
       canvas.style.height = `${containerHeight}px`;
     };
 
+    //Initial setup call
     setupCanvas();
 
     let resizeTimeout = null;
     const handleResize = () => {
       clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(setupCanvas, 100);
+      resizeTimeout = setTimeout(setupCanvas, 100); // Debounce resize
     };
     window.addEventListener("resize", handleResize);
 
     const getPos = (e) => {
-      //(getPos logic)
+      //(getPosition logic)
       if (!canvasRef.current) return { normX: 0, normY: 0, cssX: 0, cssY: 0 };
       const rect = canvasRef.current.getBoundingClientRect();
       let clientX, clientY;
@@ -136,7 +223,7 @@ export default function Canvas() {
       } else if (e.changedTouches && e.changedTouches.length > 0) { // Touch end
         clientX = e.changedTouches[0].clientX;
         clientY = e.changedTouches[0].clientY;
-      } else { // Mouse event
+      } else { //Mouse event
         clientX = e.clientX;
         clientY = e.clientY;
       }
@@ -178,21 +265,15 @@ export default function Canvas() {
     let lastNormX = 0, lastNormY = 0;
     let isRightClick = false;
 
+    // --- MODIFIED: startDrawing ---
     const startDrawing = (e) => {
       if (e.touches) e.preventDefault();
       if (!canvas || !ctx) return;
-
-      if (toolRef.current === 'eyedropper') {
-        handleCanvasClick(e);
-        return;
-      }
+      if (toolRef.current === 'eyedropper') { handleCanvasClick(e); return; }
 
       isRightClick = (e.button === 2);
       const isErasing = toolRef.current === "eraser" || (isRightClick && toolRef.current === "brush");
-
-      if (isErasing && !tempEraserRef.current && isRightClick && toolRef.current === "brush") {
-        setTempEraser(true);
-      }
+      if (isErasing && !tempEraserRef.current && isRightClick && toolRef.current === "brush") { setTempEraser(true); }
 
       drawing = true;
       const pos = getPos(e);
@@ -200,95 +281,115 @@ export default function Canvas() {
       lastNormX = bounded.x;
       lastNormY = bounded.y;
 
+      // Start tracking a new stroke
+      currentStrokeIdRef.current = uuidv4(); // Generate unique ID for this stroke
+      currentSegmentsRef.current = []; // Reset segments for the new stroke
+
+      //Apply style locally for immediate feedback
       ctx.strokeStyle = isErasing ? "#ffffff" : colorRef.current;
       ctx.lineWidth = sizeRef.current;
-
       ctx.beginPath();
       ctx.moveTo(lastNormX * canvas.width, lastNormY * canvas.height);
 
       if (socket.connected) {
         socket.emit("setUsername", usernameRef.current);
+        // Emit startDrawing for cursor update, but not the stroke data yet
         socket.emit("startDrawing", { x: lastNormX, y: lastNormY, username: usernameRef.current });
       }
     };
 
+    // --- MODIFIED: draw ---
     const draw = (e) => {
-      // ... (draw logic remains largely the same)
       if (e.touches) e.preventDefault();
       if (!canvas || !ctx) return;
-
       const pos = getPos(e);
       setCursorPos({ x: pos.cssX, y: pos.cssY }); // Update local cursor position
 
-      if (!drawing) {
+      if (!drawing) { // If not drawing, just update cursor position for others
         const now = Date.now();
         if (now - lastEmitTimeRef.current > 30) { // Throttle emit
           const bounded = clipToBounds(pos.normX, pos.normY);
-          if (socket.connected) {
-            socket.emit("mouseMove", { x: bounded.x, y: bounded.y, username: usernameRef.current });
-          }
+          if (socket.connected) { socket.emit("mouseMove", { x: bounded.x, y: bounded.y, username: usernameRef.current }); }
           lastEmitTimeRef.current = now;
         }
         return;
       }
 
+      // If drawing:
       const isErasing = toolRef.current === "eraser" || tempEraserRef.current;
-      ctx.strokeStyle = isErasing ? "#ffffff" : colorRef.current;
-      ctx.lineWidth = sizeRef.current;
+      const currentDrawColor = isErasing ? "#ffffff" : colorRef.current;
+      const currentDrawSize = sizeRef.current;
 
+      // Apply style locally
+      ctx.strokeStyle = currentDrawColor; ctx.lineWidth = currentDrawSize;
       const bounded = clipToBounds(pos.normX, pos.normY);
 
-      ctx.lineTo(bounded.x * canvas.width, bounded.y * canvas.height);
-      ctx.stroke();
-      ctx.beginPath();
+      // Draw line segment locally
+      ctx.lineTo(bounded.x * canvas.width, bounded.y * canvas.height); ctx.stroke();
+      ctx.beginPath(); // Start new path for the next segment
       ctx.moveTo(bounded.x * canvas.width, bounded.y * canvas.height);
 
+      // Create the segment data
+      const segment = {
+          x0: lastNormX, y0: lastNormY, x1: bounded.x, y1: bounded.y,
+          color: currentDrawColor, size: currentDrawSize,
+      };
+
+      //Add segment to the current stroke being tracked locally
+      currentSegmentsRef.current.push(segment);
+
+      //Emit individual 'draw' segments for live preview
       if (socket.connected) {
-        socket.emit("draw", {
-          x0: lastNormX, y0: lastNormY,
-          x1: bounded.x, y1: bounded.y,
-          color: isErasing ? "#ffffff" : colorRef.current,
-          size: sizeRef.current,
-          username: usernameRef.current,
-        });
+          socket.emit("draw", segment); // Use original 'draw' event for live preview
       }
-      lastNormX = bounded.x;
-      lastNormY = bounded.y;
+
+      // Update last position for the next segment
+      lastNormX = bounded.x; lastNormY = bounded.y;
     };
 
+    //mod: stopDrawing
     const stopDrawing = () => {
       if (!drawing || !canvas || !ctx) return;
       drawing = false;
-
-      if (tempEraserRef.current) {
-        setTempEraser(false);
-      }
+      if (tempEraserRef.current) { setTempEraser(false); }
       isRightClick = false;
 
       if (socket.connected) {
+        // Emit stopDrawing for cursor update
         socket.emit("stopDrawing", { username: usernameRef.current });
 
-        try {
-          //tet snapshot *after* drawing completes
-          const snapshotDataUrl = canvas.toDataURL("image/webp", 0.8);
-          canvasDataRef.current = canvas.toDataURL("image/png"); // Update local png cache too
-
-      
-          //pushing the state AFTER the drawing action is complete
-          undoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
-          redoStackRef.current = []; // Clear redo stack on new action
-
-          // Send snapshot to server
-          socket.emit("canvasSnapshot", snapshotDataUrl);
-
-        } catch (error) {
-          console.warn("Could not get/send snapshot or save undo state on stopDrawing:", error.message);
+        // --- NEW: Send the completed stroke to the server ---
+        if (currentStrokeIdRef.current && currentSegmentsRef.current.length > 0) {
+            socket.emit("addStroke", {
+                id: currentStrokeIdRef.current,
+                segments: currentSegmentsRef.current
+            });
+            console.log(`Sent stroke ${currentStrokeIdRef.current} with ${currentSegmentsRef.current.length} segments`);
         }
+
+        
+        currentStrokeIdRef.current = null; //reset current stroke tracking
+        currentSegmentsRef.current = [];
+
+        //Send snapshot to server after drawing stops
+        // Send snapshot slightly delayed to allow server to process the stroke first? Optional.
+        setTimeout(() => {
+            if (!canvas) return; //Check if canvas still exists
+            try {
+                const snapshotDataUrl = canvas.toDataURL("image/webp", 0.8); // Use webp for smaller size
+                canvasDataRef.current = canvas.toDataURL("image/png"); // Update local png cache too
+                socket.emit("canvasSnapshot", snapshotDataUrl); // Send snapshot
+            } catch (error) {
+                console.warn("Could not get/send snapshot on stopDrawing:", error.message);
+            }
+        }, 50); //delay 50ms
+
       }
 
-      ctx.beginPath();
-      setCursorPos({ x: -100, y: -100 });
+      ctx.beginPath(); //reset the drawing path
+      setCursorPos({ x: -100, y: -100 }); //Hide local cursor preview
     };
+
 
     //event listeners for canvas interactions
     canvas.addEventListener("contextmenu", e => e.preventDefault());
@@ -309,56 +410,100 @@ export default function Canvas() {
             socket.emit("setUsername", usernameRef.current);
         }
     });
-    socket.on("disconnect", (reason) => console.log("Socket disconnected:", reason)); 
-    socket.on("connect_error", (err) => console.error("Socket connection error:", err)); 
+    socket.on("disconnect", (reason) => console.log("Socket disconnected:", reason));
+    socket.on("connect_error", (err) => console.error("Socket connection error:", err));
 
 
-    //Handle receiving initial drawing history
-    socket.on("initialCanvas", (history) => {
+    //Handle receiving initial stroke history
+    socket.on("initialHistory", (history) => {
       if (!canvas || !ctx) return;
-      console.log("Received initial draw history");
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "#FFFFFF";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      console.log(`Received initial history with ${history?.length ?? 0} strokes.`);
+      drawHistoryRef.current = history || []; // Store stroke history
+      // If no snapshot was received previously, redraw from this history
+      if (!initialStateLoaded) {
+          console.log("No snapshot received, redrawing from initial history.");
+          redrawCanvasFromHistory(drawHistoryRef.current);
+          initialStateLoaded = true;
+      }
+    });
 
-      history.forEach(({ x0, y0, x1, y1, color, size }) => {
+    //Handle receiving redraw command (after undo/redo)
+    socket.on("redrawCanvas", (history) => {
+      if (!canvas || !ctx) return;
+      console.log(`Received redrawCanvas event with ${history?.length ?? 0} strokes.`);
+      drawHistoryRef.current = history || []; // Update history ref
+      redrawCanvasFromHistory(drawHistoryRef.current); // Redraw based on the new stroke history
+      initialStateLoaded = true; // Mark state as loaded after a redraw
+    });
+
+    // Handle receiving a full canvas state update (snapshot)
+    socket.on("canvasState", (dataURL) => {
+      if (!canvas || !ctx) return;
+      console.log("Received canvas state snapshot");
+      initialStateLoaded = true; // Mark state as loaded
+      const img = new Image();
+      img.onload = () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        // Update local snapshot reference
+        canvasDataRef.current = dataURL; // Use the received URL directly for consistency
+        console.log("Canvas updated from snapshot.");
+        // --- REMOVED: Resetting local undo stack ---
+      };
+      img.onerror = (err) => {
+          console.error("Failed to load canvas state image:", err);
+          // Optionally clear canvas or attempt redraw from history as fallback
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = "#FFFFFF";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          canvasDataRef.current = null;
+      }
+      img.src = dataURL;
+    });
+
+
+    // --- RE-ADDED: Listener for individual 'draw' segments (live preview) ---
+    socket.on("draw", (segmentData) => {
+        if (!canvas || !ctx || drawing) return; // Don't draw own previews
+        const { x0, y0, x1, y1, color, size } = segmentData;
+
+        // Save current context settings
+        const originalStrokeStyle = ctx.strokeStyle;
+        const originalLineWidth = ctx.lineWidth;
+        const originalLineCap = ctx.lineCap;
+        const originalLineJoin = ctx.lineJoin;
+
+        // Apply styles for the preview segment
         ctx.beginPath();
         ctx.moveTo(x0 * canvas.width, y0 * canvas.height);
         ctx.lineTo(x1 * canvas.width, y1 * canvas.height);
         ctx.strokeStyle = color;
         ctx.lineWidth = size;
+        ctx.lineCap = "round"; // Ensure consistency
+        ctx.lineJoin = "round";
         ctx.stroke();
-      });
 
-      //Save initial state for undo
-      try {
-        canvasDataRef.current = canvas.toDataURL("image/png");
-        
-        undoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)]; //undo stack starts with this initial state
-        redoStackRef.current = [];
-        console.log("Initialized undo stack from initialCanvas");
-      } catch (error) {
-        console.error("Could not save initial undo state from history:", error);
-        undoStackRef.current = [];
-      }
+        // Restore previous context settings immediately
+        ctx.strokeStyle = originalStrokeStyle;
+        ctx.lineWidth = originalLineWidth;
+        ctx.lineCap = originalLineCap;
+        ctx.lineJoin = originalLineJoin;
+        ctx.beginPath(); // Reset path
     });
 
-    //receiving a drawing segment from another user
-    socket.on("draw", ({ x0, y0, x1, y1, color, size }) => {
-      // ... (draw logic remains the same)
-      if (!canvas || !ctx) return;
-      const originalStrokeStyle = ctx.strokeStyle;
-      const originalLineWidth = ctx.lineWidth;
-      ctx.beginPath();
-      ctx.moveTo(x0 * canvas.width, y0 * canvas.height);
-      ctx.lineTo(x1 * canvas.width, y1 * canvas.height);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = size;
-      ctx.stroke();
-      ctx.strokeStyle = originalStrokeStyle;
-      ctx.lineWidth = originalLineWidth;
-      ctx.beginPath();
+    // --- Listener for completed strokes from others (now mainly for history update) ---
+    socket.on("newStroke", (stroke) => {
+        if (!stroke || !Array.isArray(stroke.segments)) return;
+        console.log(`Received new stroke ${stroke.id} from user ${stroke.userId} (for history)`);
+
+        // Add stroke to local history for consistency
+        // Check if stroke already exists to avoid duplicates
+        if (!drawHistoryRef.current.some(s => s.id === stroke.id)) {
+            drawHistoryRef.current.push(stroke);
+        }
+        // Don't redraw here, rely on live segments and snapshots/redrawCanvas for visuals
     });
+
 
     //Handle canvas clear event from server
     socket.on("clear", () => {
@@ -367,40 +512,10 @@ export default function Canvas() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = "#FFFFFF";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      canvasDataRef.current = null;
-      //Reset stacks and add cleared state
-      try {
-        undoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)];
-        redoStackRef.current = [];
-         console.log("Initialized undo stack after clear");
-      } catch (error) {
-        console.error("Could not save undo state:", error);
-         undoStackRef.current = [];
-      }
-    });
-
-    //Handle receiving a full canvas state update (snapshot)
-    socket.on("canvasState", (dataURL) => {
-      if (!canvas || !ctx) return;
-      console.log("Received canvas state snapshot");
-      const img = new Image();
-      img.onload = () => {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        //Reset local state based on snapshot
-        try {
-          canvasDataRef.current = dataURL;
-           // *** Initialize undo stack with this snapshot state ***
-          undoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)];
-          redoStackRef.current = [];
-          console.log("Initialized undo stack from canvasState");
-        } catch (error) {
-          console.error("Could not save undo state after receiving snapshot:", error);
-          undoStackRef.current = [];
-        }
-      };
-      img.onerror = (err) => console.error("Failed to load canvas state image:", err);
-      img.src = dataURL;
+      canvasDataRef.current = null; // Clear local snapshot
+      drawHistoryRef.current = []; // Clear local history (of strokes)
+      initialStateLoaded = true; // Mark state as loaded (empty)
+      // --- REMOVED: Resetting local undo stack ---
     });
 
     // ... (userMouseMove, requestCanvasSnapshot remain the same)
@@ -431,21 +546,14 @@ export default function Canvas() {
     //Connect Socket
     socket.connect();
 
-    //Periodic Backup (Optional)
-    //(backup interval remains the same)
-    const intervalId = setInterval(() => {
-      if (socket.connected && canvas && !drawing) {
-        try {
-          canvasDataRef.current = canvas.toDataURL("image/png");
-        } catch (error) { }
-      }
-    }, 60000);
+    //Periodic Backup (Optional) - Removed as snapshots are sent on stopDrawing
+    // const intervalId = setInterval(() => { ... }, 60000);
 
     //Cleanup
     return () => {
       console.log("Cleaning up canvas effect");
       socket.disconnect();
-      clearInterval(intervalId);
+      // clearInterval(intervalId); // Removed backup interval
       window.removeEventListener("resize", handleResize);
       if (canvas) {
         canvas.removeEventListener("contextmenu", e => e.preventDefault());
@@ -458,85 +566,66 @@ export default function Canvas() {
         canvas.removeEventListener("touchend", stopDrawing);
         canvas.removeEventListener("touchcancel", stopDrawing);
       }
+      // Turn off all socket listeners specific to this component instance
       socket.off("connect");
       socket.off("disconnect");
       socket.off("connect_error");
-      socket.off("initialCanvas");
-      socket.off("draw");
-      socket.off("clear");
+      socket.off("initialHistory"); // Updated event
+      socket.off("redrawCanvas");   // Updated event
       socket.off("canvasState");
+      socket.off("newStroke");      // Updated event
+      socket.off("draw");           // RE-ADDED event
+      socket.off("clear");
       socket.off("userMouseMove");
       socket.off("requestCanvasSnapshot");
     };
-  }, [username]);
+  }, [username, redrawCanvasFromHistory]); // Added redrawCanvasFromHistory dependency
 
 
-  //Undo and redo handling effect
-  //state saving after stopDrawing ***
+  // --- MODIFIED: Undo/redo handling effect (emits events to server) ---
   useEffect(() => {
-    const handler = (e) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
+    let isUndoRedoKeyDown = false; // Flag to track if Ctrl+Z/Y is already down
 
-      // Undo: Ctrl+Z or Cmd+Z
-      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
-        e.preventDefault();
-        if (undoStackRef.current.length > 1) {
-          let currentState = null;
-          try {
-            currentState = undoStackRef.current.pop();
-            redoStackRef.current.push(currentState);
-            const previousState = undoStackRef.current[undoStackRef.current.length - 1];
-            ctx.putImageData(previousState, 0, 0);
-            canvasDataRef.current = canvas.toDataURL("image/png");
-            if (socket.connected) {
-              //Send the *restored* state
-              socket.emit("canvasState", canvas.toDataURL("image/webp", 0.8));
-            }
-          } catch (error) {
-            console.error("Undo failed:", error);
-            if (currentState && redoStackRef.current[redoStackRef.current.length - 1] === currentState) {
-                redoStackRef.current.pop();
-            }
-            if (currentState) {
-                undoStackRef.current.push(currentState);
-            }
+    const handleKeyDown = (e) => {
+      const isUndo = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey;
+      const isRedo = (e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "y" || (e.shiftKey && e.key.toLowerCase() === "z"));
+
+      // Check if the event target is the body or the canvas container to avoid interfering with text inputs
+      const targetIsBodyOrCanvas = document.body === e.target || canvasContainerRef.current?.contains(e.target);
+
+      if (targetIsBodyOrCanvas && (isUndo || isRedo) && !isUndoRedoKeyDown) {
+        e.preventDefault(); // Prevent browser default
+        isUndoRedoKeyDown = true; // Set flag
+
+        if (socket.connected) {
+          if (isUndo) {
+            console.log("Sending undo event to server (single press)");
+            socket.emit("undo"); // Emit undo request
+          } else if (isRedo) {
+            console.log("Sending redo event to server (single press)");
+            socket.emit("redo"); // Emit redo request
           }
-        } else {
-            console.log("Undo stack empty or only contains initial state.");
-        }
-      }
-      //Redo: Ctrl+Y or Cmd+Shift+Z
-      else if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.shiftKey && e.key === "Z"))) {
-        e.preventDefault();
-        const nextState = redoStackRef.current.pop();
-        if (nextState) {
-          try {
-            undoStackRef.current.push(nextState);
-            ctx.putImageData(nextState, 0, 0);
-            canvasDataRef.current = canvas.toDataURL("image/png");
-            if (socket.connected) {
-               //Send the restored state  (redo)
-              socket.emit("canvasState", canvas.toDataURL("image/webp", 0.8));
-            }
-          } catch (error) {
-            console.error("Redo failed:", error);
-            redoStackRef.current.push(nextState);
-            if (undoStackRef.current[undoStackRef.current.length - 1] === nextState) {
-                undoStackRef.current.pop();
-            }
-          }
-        } else {
-             console.log("Redo stack empty.");
         }
       }
     };
 
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
+     const handleKeyUp = (e) => {
+      // Reset flag when Ctrl, Meta, Z, or Y key is released
+      if (['Control', 'Meta', 'z', 'Z', 'y', 'Y'].includes(e.key)) {
+          isUndoRedoKeyDown = false;
+      }
+    };
+
+    // Add the event listeners to the window
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+
+    // Cleanup function to remove the event listeners when the component unmounts
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, []); // Empty dependency array means this effect runs once on mount
 
   //Effect to emit username when it changes
   useEffect(() => {
@@ -549,7 +638,7 @@ export default function Canvas() {
   const isErasingMode = tool === "eraser" || tempEraser;
   const canvasCursor = tool === 'eyedropper' ? 'crosshair' : (isErasingMode ? 'grab' : 'default');
 
- 
+
   return (
     <>
       {/* Toolbar */}

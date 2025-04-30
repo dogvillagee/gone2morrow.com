@@ -48,7 +48,7 @@ html, body {
  
   background: linear-gradient(
     135deg,
-    yellow, Firebrick, Royalblue, green, palegreen
+    yellow, Firebrick, Royalblue, green, darkgreen
   );
   
   /* can change this maybe*/
@@ -112,7 +112,7 @@ h1 {
 .shortcut-tip {
   display: flex;
   align-items: center;
-  font-size: 0.8.5rem; /*.5 because otherwise its weirdly spaced <>_<>*/
+  font-size: 0.8.5rem; /*.5 because otherwise its weirdly spaced*/
   color: #000000;
   flex-wrap: wrap;
   gap: 3px;
@@ -282,7 +282,7 @@ canvas {
   margin-top: 1.5rem; 
   text-align: center;
   font-size: 0.8rem; 
-  color: #666;
+  color: #000000;
   width: 100%;
 }
 

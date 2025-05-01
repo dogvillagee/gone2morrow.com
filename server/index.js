@@ -21,7 +21,8 @@ const io = new Server(server, {
       origin: FRONTEND_URL, // Use the variable here too
       methods: ["GET", "POST"]
   },
-  // ... other options
+  // Consider increasing maxHttpBufferSize if snapshots are large, though sending deltas is better
+  // maxHttpBufferSize: 1e8 // Example: 100 MB (use with caution)
 });
 //In-memory State
 const activeUsers = {}; //this feature doesnt work yet,
@@ -42,24 +43,24 @@ const RESET_CONFIG = { //config constant and testing below
   // testDelayMinutes: 1 // uncomment fir testing
 };
 const INACTIVITY_LIMIT = 15 * 1000;      //How long until a non-moving user's cursor disappears
-const MAX_DRAW_HISTORY_MEMORY = 5000;  //Max *strokes* kept in server memory
+const MAX_DRAW_HISTORY_MEMORY = 10;  //Max *strokes* kept in server memory (CHANGED FROM 5000)
 const BROADCAST_INTERVAL = 50;         //How often (ms) to send user position updates
 const SNAPSHOT_REQUEST_INTERVAL = 20000; //How often (ms) to check if a new snapshot is needed
 const SNAPSHOT_STALE_TIME = 45000;       //How old (ms) a snapshot can be before requesting a new one
-const HISTORY_PRUNE_INTERVAL = 60000;    //How often (ms) to prune the in-memory draw history
+const HISTORY_PRUNE_INTERVAL = 30000;    //How often (ms) to prune the in-memory draw history (CHANGED FROM 60000)
 const MAX_CHAT_HISTORY = 20;             //Max number of chat messages stored/sent on join
 
 
-//Function to broadcast redraw command based on history 
-function broadcastRedraw() {
-    //Send the full history of strokes. Clients will redraw based on this.
-    io.emit("redrawCanvas", drawHistory);
-    console.log(`Broadcasting redraw command with ${drawHistory.length} strokes.`);
-    //Clear the snapshot after undo/redo as it's now potentially invalid
-    //Clients will need to send a new one if they are the source of truth
-    lastCanvasDataURL = null;
-    lastCanvasUpdateTime = Date.now(); // Reset update time
-}
+//Function to broadcast redraw command based on history - NO LONGER USED FOR UNDO/REDO
+// function broadcastRedraw() {
+//     //Send the full history of strokes. Clients will redraw based on this.
+//     io.emit("redrawCanvas", drawHistory);
+//     console.log(`Broadcasting redraw command with ${drawHistory.length} strokes.`);
+//     //Clear the snapshot after undo/redo as it's now potentially invalid
+//     //Clients will need to send a new one if they are the source of truth
+//     lastCanvasDataURL = null;
+//     lastCanvasUpdateTime = Date.now(); // Reset update time
+// }
 
 
 function broadcastActiveUsers() { //Broadcasts active user positions/status (throttled by BROADCAST_INTERVAL)
@@ -106,11 +107,12 @@ setInterval(requestCanvasSnapshot, SNAPSHOT_REQUEST_INTERVAL);
 //Periodically prunes the in-memory draw history to prevent excessive memory use
 function pruneDrawHistory() {
   if (drawHistory.length > MAX_DRAW_HISTORY_MEMORY) {
+    const removedCount = drawHistory.length - MAX_DRAW_HISTORY_MEMORY;
     console.log(`Pruning draw history from ${drawHistory.length} to ${MAX_DRAW_HISTORY_MEMORY} strokes`);
-    drawHistory = drawHistory.slice(-MAX_DRAW_HISTORY_MEMORY); // Keep only the tail end
+    drawHistory = drawHistory.slice(removedCount); // Keep only the tail end
   }
 }
-setInterval(pruneDrawHistory, HISTORY_PRUNE_INTERVAL);
+setInterval(pruneDrawHistory, HISTORY_PRUNE_INTERVAL); // Prune more often
 
 //Clears all canvas state (history, snapshot) and chat, notifies clients
 function clearCanvas() {
@@ -119,7 +121,7 @@ function clearCanvas() {
   lastCanvasDataURL = null;
   lastCanvasUpdateTime = Date.now();
   chatMessages = []; //clear chat too
-  io.emit("clear"); //notify users/clients 
+  io.emit("clear"); //notify users/clients
   console.log("Canvas cleared at", new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
 }
 
@@ -130,7 +132,7 @@ let resetTimeoutId = null; //Stores the timeout ID for cancellation
 function scheduleReset() {
     if (resetTimeoutId) clearTimeout(resetTimeoutId); //Clear previous timeout
 
-    //Testing canvas wipes 
+    //Testing canvas wipes
     if (RESET_CONFIG.testMode && RESET_CONFIG.testDelayMinutes) {
         const delayMs = RESET_CONFIG.testDelayMinutes * 60 * 1000;
         console.log(`TEST MODE: Scheduling wipe in ${RESET_CONFIG.testDelayMinutes} min.`);
@@ -180,14 +182,14 @@ io.on("connection", socket => {
   };
 
   //Send Initial State to New Client
-  // 1. Prefer sending snapshot if available
+  // 1. Send stroke history first for client to build state
+  console.log(`Sending ${drawHistory.length} history strokes to ${socket.id}`);
+  socket.emit("initialHistory", drawHistory); // Use a distinct event name
+
+  // 2. Then send snapshot if available (client can optionally use this for faster initial load)
   if (lastCanvasDataURL) {
     console.log(`Sending snapshot to ${socket.id}`);
     socket.emit("canvasState", lastCanvasDataURL);
-  } else {
-    // 2. Otherwise, send stroke history (client redraws from this)
-    console.log(`No snapshot, sending ${drawHistory.length} history strokes to ${socket.id}`);
-    socket.emit("initialHistory", drawHistory); // Use a distinct event name
   }
   // 3. Send recent chat messages
   socket.emit("chatHistory", chatMessages);
@@ -227,7 +229,7 @@ io.on("connection", socket => {
       user.x = data.x; user.y = data.y; //Update position
       user.lastActive = Date.now();
       user.hasMoved = true;
-      console.log(`${user.username} started drawing`);
+      // console.log(`${user.username} started drawing`); // Less verbose logging
       broadcastActiveUsers(); //Broadcast immediately to show drawing status
     }
   });
@@ -267,9 +269,14 @@ io.on("connection", socket => {
           };
           // Add the complete stroke to history
           drawHistory.push(completeStroke);
-          console.log(`Added stroke ${completeStroke.id} from user ${socket.id}`);
-          // Do NOT broadcast the stroke itself here, rely on snapshot + redrawCanvas for sync
-          // Pruning happens via interval
+          // console.log(`Added stroke ${completeStroke.id} from user ${socket.id}`); // Less verbose
+          pruneDrawHistory(); // Prune immediately after adding if needed
+
+          // Broadcast the newly added stroke to all clients
+          // This allows clients to maintain their own consistent history
+          io.emit("newStroke", completeStroke);
+          // console.log(`Broadcasted new stroke ${completeStroke.id}`);
+
       } else {
           console.warn(`Received invalid stroke data from ${socket.id}:`, strokeData);
       }
@@ -281,7 +288,7 @@ io.on("connection", socket => {
     if (user) {
       user.drawing = false;
       user.lastActive = Date.now();
-      console.log(`${user.username} stopped drawing`);
+      // console.log(`${user.username} stopped drawing`); // Less verbose
       broadcastActiveUsers(); // Broadcast status change
       //Client now sends stroke via "addStroke" and snapshot via "canvasSnapshot"
     }
@@ -290,7 +297,7 @@ io.on("connection", socket => {
   //Client sends a canvas snapshot (usually after drawing or by request)
   socket.on("canvasSnapshot", dataURL => {
     if (typeof dataURL === 'string' && dataURL.startsWith("data:image/")) {
-      //console.log(`Received snapshot from ${socket.id}`);
+      //console.log(`Received snapshot from ${socket.id}`); // Less verbose
       lastCanvasDataURL = dataURL; // Update the authoritative snapshot
       lastCanvasUpdateTime = Date.now();
       //new users will get it on join
@@ -299,13 +306,14 @@ io.on("connection", socket => {
     }
   });
 
-  //new Per-User Undo Logic
+  //Per-User Undo Logic - OPTIMIZED
   socket.on("undo", () => {
       const userId = socket.id;
       let strokeIndexToUndo = -1;
       // Find the latest stroke by this user that is NOT undone
       for (let i = drawHistory.length - 1; i >= 0; i--) {
-          if (drawHistory[i].userId === userId && !drawHistory[i].undone) {
+          // Ensure the stroke and userId exist before comparing
+          if (drawHistory[i] && drawHistory[i].userId === userId && !drawHistory[i].undone) {
               strokeIndexToUndo = i;
               break;
           }
@@ -313,31 +321,36 @@ io.on("connection", socket => {
 
       if (strokeIndexToUndo !== -1) {
           drawHistory[strokeIndexToUndo].undone = true; // Mark as undone
-          console.log(`User ${userId} undid stroke ${drawHistory[strokeIndexToUndo].id}`);
-          broadcastRedraw(); // Tell all clients to redraw from history
+          const undoneStroke = drawHistory[strokeIndexToUndo]; // Get the stroke object
+          console.log(`User ${userId} undid stroke ${undoneStroke.id}`);
+          // Emit only the change, not the full history
+          io.emit("strokeUndoStateChanged", { strokeId: undoneStroke.id, undone: true });
       } else {
-          console.log(`No active stroke found for user ${userId} to undo.`);
+          // console.log(`No active stroke found for user ${userId} to undo.`); // Less verbose
       }
   });
 
-  //Per-User Redo Logic
+  //Per-User Redo Logic - OPTIMIZED
   socket.on("redo", () => {
       const userId = socket.id;
       let strokeIndexToRedo = -1;
       // Find the latest stroke by this user that IS undone
       for (let i = drawHistory.length - 1; i >= 0; i--) {
-          if (drawHistory[i].userId === userId && drawHistory[i].undone) {
+          // Ensure the stroke and userId exist before comparing
+          if (drawHistory[i] && drawHistory[i].userId === userId && drawHistory[i].undone) {
               strokeIndexToRedo = i;
-              break;
+              break; // Found the most recent one
           }
       }
 
       if (strokeIndexToRedo !== -1) {
           drawHistory[strokeIndexToRedo].undone = false; // Mark as not undone
-          console.log(`User ${userId} redid stroke ${drawHistory[strokeIndexToRedo].id}`);
-          broadcastRedraw(); // Tell all clients to redraw from history
+          const redoneStroke = drawHistory[strokeIndexToRedo]; // Get the stroke object
+          console.log(`User ${userId} redid stroke ${redoneStroke.id}`);
+          // Emit only the change, not the full history
+          io.emit("strokeUndoStateChanged", { strokeId: redoneStroke.id, undone: false });
       } else {
-          console.log(`No undone stroke found for user ${userId} to redo.`);
+          // console.log(`No undone stroke found for user ${userId} to redo.`); // Less verbose
       }
   });
 

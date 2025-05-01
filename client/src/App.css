@@ -112,7 +112,8 @@ h1 {
 .shortcut-tip {
   display: flex;
   align-items: center;
-  font-size: 0.8.5rem; /*.5 because otherwise its weirdly spaced*/
+  font-size: 0.8rem; /*.5 because otherwise its weirdly spaced*/
+  font-weight: 600;
   color: #000000;
   flex-wrap: wrap;
   gap: 3px;
@@ -281,7 +282,8 @@ canvas {
 .footer {
   margin-top: 1.5rem; 
   text-align: center;
-  font-size: 0.1.5rem; 
+  font-size: 0.6rem; 
+  font-weight: 600;
   color: #000000;
   width: 100%;
 }

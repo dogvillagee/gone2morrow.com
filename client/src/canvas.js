@@ -70,7 +70,6 @@ export default function Canvas() {
   }, []);
 
   //redraw canvas from stroke history.
-  // This function is now called MORE OFTEN (on initial load, after undo/redo state change)
   const redrawCanvasFromHistory = useCallback(() => { // No longer needs history passed in
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -108,7 +107,7 @@ export default function Canvas() {
         // Check if the stroke object exists and is not marked as undone
         // Also check if segments is an array before iterating
         if (stroke && !stroke.undone && Array.isArray(stroke.segments)) {
-            // Iterate through the segments within this valid stroke
+            // Iterate through the segments within valid stroke
             stroke.segments.forEach(segment => {
                 // Add check for segment validity
                 if (segment && typeof segment.x0 === 'number' && typeof segment.y0 === 'number' &&
@@ -142,7 +141,7 @@ export default function Canvas() {
        canvasDataRef.current = canvas.toDataURL("image/png");
        // console.log("Canvas redraw complete from history, snapshot updated."); // Less verbose
     } catch(e){ console.warn("Could not update snapshot after history redraw"); }
-  }, []); // useCallback ensures this function reference is stable
+  }, []); //useCallback ensures function reference is stable
 
 
   //main Canvas and Socket setup effect
@@ -305,7 +304,7 @@ export default function Canvas() {
       lastNormY = bounded.y;
 
       // Start tracking a new stroke
-      currentStrokeIdRef.current = uuidv4(); // Generate unique ID for this stroke
+      currentStrokeIdRef.current = uuidv4(); //Generate unique ID for THIS stroke
       currentSegmentsRef.current = []; // Reset segments for the new stroke
 
       //Apply style locally for immediate feedback
@@ -372,7 +371,7 @@ export default function Canvas() {
 
     //mod: stopDrawing
     const stopDrawing = () => {
-      if (!drawing || !canvas || !ctx) return; // Ensure we were actually drawing
+      if (!drawing || !canvas || !ctx) return; 
       drawing = false; // Set local drawing flag immediately
       if (tempEraserRef.current) { setTempEraser(false); }
       isRightClick = false;
@@ -450,7 +449,7 @@ export default function Canvas() {
       if (!canvas || !ctx) return;
       console.log(`Received initial history with ${history?.length ?? 0} strokes.`);
       drawHistoryRef.current = history || []; // Store stroke history
-      // If no snapshot was received previously, redraw from this history
+      //If no snapshot was received previously, redraw from history
       if (!initialStateLoaded) {
           console.log("No snapshot received, redrawing from initial history.");
           redrawCanvasFromHistory(); // Use the ref now
@@ -463,8 +462,8 @@ export default function Canvas() {
     // Handle receiving a full canvas state update (snapshot)
     socket.on("canvasState", (dataURL) => {
       if (!canvas || !ctx) return;
-       // Only apply snapshot if initial history hasn't been processed OR if snapshot is newer
-       // This prevents snapshot overriding history redraws from undo/redo
+       
+       //prevents snapshot overriding history redraws from undo/redo
        if (!initialStateLoaded /* || snapshotIsNewer logic needed */ ) {
             console.log("Received canvas state snapshot for initial load");
             initialStateLoaded = true;
@@ -485,7 +484,8 @@ export default function Canvas() {
 
     //Listener for individual 'draw' segments (live preview)
     socket.on("draw", (segmentData) => {
-        if (!canvas || !ctx || drawing) return; // Don't draw own previews while drawing locally
+        // *** CHANGE HERE: Removed the 'drawing' check ***
+        if (!canvas || !ctx) return; // Don't draw if canvas/context not ready
         const { x0, y0, x1, y1, color, size } = segmentData;
 
         // Save current context settings
@@ -530,8 +530,7 @@ export default function Canvas() {
         } else {
             console.warn("Received invalid new stroke data:", newStroke);
         }
-        // NOTE: We don't redraw the full canvas here. Drawing happened live via segments.
-        // This just keeps the history array accurate for future redraws (like undo/redo).
+
     });
 
     // Listener for undo/redo state changes from server
@@ -606,7 +605,7 @@ export default function Canvas() {
       if (canvas) {
         // Remove specific listeners added to canvas
         // Note: Need named func for removal if using preventDefault directly
-        canvas.removeEventListener("contextmenu", e => e.preventDefault()); // This might not remove correctly
+        canvas.removeEventListener("contextmenu", e => e.preventDefault()); //This might not remove correctly?
         canvas.removeEventListener("mousedown", startDrawing);
         canvas.removeEventListener("mousemove", draw);
         canvas.removeEventListener("mouseup", stopDrawing);
@@ -621,10 +620,10 @@ export default function Canvas() {
       socket.off("disconnect");
       socket.off("connect_error");
       socket.off("initialHistory");
-      socket.off("redrawCanvas");   // Ensure this is off (though it's replaced)
+      socket.off("redrawCanvas");   //Ensure this is off (though it's replaced)
       socket.off("canvasState");
-      socket.off("newStroke");      // Cleanup new listener
-      socket.off("strokeUndoStateChanged"); // Cleanup new listener
+      socket.off("newStroke");      //cleanup new listener
+      socket.off("strokeUndoStateChanged"); //cleanup new listener
       socket.off("draw");
       socket.off("clear");
       socket.off("userMouseMove");
@@ -677,7 +676,7 @@ export default function Canvas() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, []); // Empty dependency array means this effect runs once on mount
+  }, []); //Empty dependency array means effect runs once on mount
 
   //Effect to emit username when it changes
   useEffect(() => { if (username && socket.connected) { socket.emit("setUsername", username); } }, [username]);

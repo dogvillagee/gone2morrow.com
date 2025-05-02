@@ -141,7 +141,7 @@ export default function Canvas() {
        canvasDataRef.current = canvas.toDataURL("image/png");
        // console.log("Canvas redraw complete from history, snapshot updated."); // Less verbose
     } catch(e){ console.warn("Could not update snapshot after history redraw"); }
-  }, []); //useCallback ensures function reference is stable
+  }, []); // useCallback ensures function reference is stable
 
 
   //main Canvas and Socket setup effect
@@ -304,7 +304,7 @@ export default function Canvas() {
       lastNormY = bounded.y;
 
       // Start tracking a new stroke
-      currentStrokeIdRef.current = uuidv4(); //Generate unique ID for THIS stroke
+      currentStrokeIdRef.current = uuidv4(); // Generate unique ID for stroke
       currentSegmentsRef.current = []; // Reset segments for the new stroke
 
       //Apply style locally for immediate feedback
@@ -449,7 +449,7 @@ export default function Canvas() {
       if (!canvas || !ctx) return;
       console.log(`Received initial history with ${history?.length ?? 0} strokes.`);
       drawHistoryRef.current = history || []; // Store stroke history
-      //If no snapshot was received previously, redraw from history
+      // If no snapshot was received previously, redraw from history
       if (!initialStateLoaded) {
           console.log("No snapshot received, redrawing from initial history.");
           redrawCanvasFromHistory(); // Use the ref now
@@ -462,7 +462,7 @@ export default function Canvas() {
     // Handle receiving a full canvas state update (snapshot)
     socket.on("canvasState", (dataURL) => {
       if (!canvas || !ctx) return;
-       
+       // Only apply snapshot if initial history hasn't been processed OR if snapshot is newer
        //prevents snapshot overriding history redraws from undo/redo
        if (!initialStateLoaded /* || snapshotIsNewer logic needed */ ) {
             console.log("Received canvas state snapshot for initial load");
@@ -482,19 +482,29 @@ export default function Canvas() {
     });
 
 
-    //Listener for individual 'draw' segments (live preview)
+    //Listener for individual 'draw' segments (live preview) from OTHER users
     socket.on("draw", (segmentData) => {
-        // *** CHANGE HERE: Removed the 'drawing' check ***
-        if (!canvas || !ctx) return; // Don't draw if canvas/context not ready
+        // Ensure segmentData and its properties exist
+        if (!segmentData || typeof segmentData.x0 !== 'number' || typeof segmentData.y0 !== 'number' ||
+            typeof segmentData.x1 !== 'number' || typeof segmentData.y1 !== 'number' ||
+            typeof segmentData.color !== 'string' || typeof segmentData.size !== 'number') {
+            console.warn("Received invalid segment data:", segmentData);
+            return;
+        }
+
+        // Check if canvas and context are ready
+        if (!canvas || !ctx) return;
+
+
         const { x0, y0, x1, y1, color, size } = segmentData;
 
-        // Save current context settings
+        // Save current context settings to avoid interference with local drawing
         const originalStrokeStyle = ctx.strokeStyle;
         const originalLineWidth = ctx.lineWidth;
         const originalLineCap = ctx.lineCap;
         const originalLineJoin = ctx.lineJoin;
 
-        // Apply styles for the preview segment
+        // Apply styles for the received segment
         ctx.beginPath();
         ctx.moveTo(x0 * canvas.width, y0 * canvas.height);
         ctx.lineTo(x1 * canvas.width, y1 * canvas.height);
@@ -509,8 +519,9 @@ export default function Canvas() {
         ctx.lineWidth = originalLineWidth;
         ctx.lineCap = originalLineCap;
         ctx.lineJoin = originalLineJoin;
-        ctx.beginPath(); // Reset path
+        ctx.beginPath(); // Reset path to avoid affecting subsequent local drawing
     });
+
 
     //Listener for completed strokes from others for history draw updating
     socket.on("newStroke", (newStroke) => {
@@ -525,7 +536,7 @@ export default function Canvas() {
                      const removedCount = drawHistoryRef.current.length - MAX_DRAW_HISTORY_CLIENT;
                      drawHistoryRef.current = drawHistoryRef.current.slice(removedCount);
                 }
-                // console.log(`Added stroke ${newStroke.id} to local history`); // Less verbose
+                //console.log(`Added stroke ${newStroke.id} to local history`); // Less verbose
             }
         } else {
             console.warn("Received invalid new stroke data:", newStroke);
@@ -573,16 +584,17 @@ export default function Canvas() {
       Object.entries(otherUsers).forEach(([id, data]) => {
         if (data && typeof data.x === 'number' && typeof data.y === 'number') {
              const bounded = clipToBounds(data.x, data.y);
+             // Use the drawing status directly from the server update
              boundedUsers[id] = { ...data, x: bounded.x, y: bounded.y };
         }
       });
-      setActiveUsers(boundedUsers);
+      setActiveUsers(boundedUsers); // Update state for cursor rendering
     });
     socket.on("requestCanvasSnapshot", () => {
       if (!canvas || !socket.connected) return;
       console.log("Server requested canvas snapshot");
       try {
-        // Prefer PNG for snapshot reliability, maybe lower quality slightly if needed
+        
         const snapshotDataUrl = canvas.toDataURL("image/png", 0.9); // Slightly compressed PNG
         socket.emit("canvasSnapshot", snapshotDataUrl);
       } catch (error) {
@@ -605,7 +617,7 @@ export default function Canvas() {
       if (canvas) {
         // Remove specific listeners added to canvas
         // Note: Need named func for removal if using preventDefault directly
-        canvas.removeEventListener("contextmenu", e => e.preventDefault()); //This might not remove correctly?
+        canvas.removeEventListener("contextmenu", e => e.preventDefault()); // might not remove correctly
         canvas.removeEventListener("mousedown", startDrawing);
         canvas.removeEventListener("mousemove", draw);
         canvas.removeEventListener("mouseup", stopDrawing);
@@ -615,15 +627,15 @@ export default function Canvas() {
         canvas.removeEventListener("touchend", stopDrawing);
         canvas.removeEventListener("touchcancel", stopDrawing);
       }
-      // Turn off all socket listeners specific to this component instance
+      // Turn off all socket listeners specific to component instance
       socket.off("connect");
       socket.off("disconnect");
       socket.off("connect_error");
       socket.off("initialHistory");
-      socket.off("redrawCanvas");   //Ensure this is off (though it's replaced)
+      socket.off("redrawCanvas");   // Ensure off (though it's replaced)
       socket.off("canvasState");
-      socket.off("newStroke");      //cleanup new listener
-      socket.off("strokeUndoStateChanged"); //cleanup new listener
+      socket.off("newStroke");      // Cleanup new listener
+      socket.off("strokeUndoStateChanged"); // Cleanup new listener
       socket.off("draw");
       socket.off("clear");
       socket.off("userMouseMove");
@@ -676,7 +688,7 @@ export default function Canvas() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, []); //Empty dependency array means effect runs once on mount
+  }, []); // Empty dependency array means effect runs once on mount
 
   //Effect to emit username when it changes
   useEffect(() => { if (username && socket.connected) { socket.emit("setUsername", username); } }, [username]);
@@ -729,7 +741,7 @@ export default function Canvas() {
 
         {/*Other Users Cursors Overlay*/}
         <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 5 }}>
-          {/*cursor rendering remains the same*/}
+          {/*cursor rendering updated to use server drawing status*/}
            {canvasContainerRef.current && Object.entries(activeUsers).map(([id, data]) => (
             <div key={id} style={{
               position: "absolute",
@@ -738,6 +750,7 @@ export default function Canvas() {
               transition: "left 0.05s linear, top 0.05s linear",
               transform: 'translateY(-100%)'
             }}>
+              {/* Use data.drawing directly from the server state */}
               <div className="cursor-pointer" style={{ color: data.drawing ? 'black' : 'gray' }}>▼</div>
               <div className="username-tag" style={{ backgroundColor: 'rgba(0,0,0,0.5)', color: 'white', padding: '2px 4px', borderRadius: '3px', fontSize: '0.8em', whiteSpace: 'nowrap' }}>
                   {data.username || 'Anonymous'}

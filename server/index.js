@@ -36,6 +36,8 @@ let lastCanvasDataURL = null;
 let lastCanvasUpdateTime = Date.now(); // When the snapshot was last updated
 let chatMessages = []; // store messages, username, timestamp
 
+// Track which users are currently drawing
+const activeDrawers = new Set(); // Store socket IDs of users currently drawing
 
 const RESET_CONFIG = { //config constant and testing below
   hour: 0, // Hour (in EST) 0 is midnight
@@ -49,6 +51,7 @@ const SNAPSHOT_REQUEST_INTERVAL = 20000; //How often (ms) to check if a new snap
 const SNAPSHOT_STALE_TIME = 45000;       //How old (ms) a snapshot can be before requesting a new one
 const HISTORY_PRUNE_INTERVAL = 30000;    //How often (ms) to prune the in-memory draw history (CHANGED FROM 60000)
 const MAX_CHAT_HISTORY = 20;             //Max number of chat messages stored/sent on join
+const USER_UNDO_REDO_LIMIT = 5;          // How many recent strokes per user are considered for undo/redo
 
 
 //Function to broadcast redraw command based on history - NO LONGER USED FOR UNDO/REDO
@@ -69,7 +72,12 @@ function broadcastActiveUsers() { //Broadcasts active user positions/status (thr
   //Filter users who have moved and were active recently
   for (const [id, user] of Object.entries(activeUsers)) {
     if (user.hasMoved && now - user.lastActive <= INACTIVITY_LIMIT) {
-      filteredUsers[id] = { username: user.username, x: user.x, y: user.y, drawing: user.drawing };
+      filteredUsers[id] = {
+        username: user.username,
+        x: user.x,
+        y: user.y,
+        drawing: user.drawing || activeDrawers.has(id) // Use activeDrawers Set to correctly track drawing state
+      };
     }
   }
   io.emit("userMouseMove", filteredUsers); //Send to all clients
@@ -229,8 +237,12 @@ io.on("connection", socket => {
       user.x = data.x; user.y = data.y; //Update position
       user.lastActive = Date.now();
       user.hasMoved = true;
-      // console.log(`${user.username} started drawing`); // Less verbose logging
-      broadcastActiveUsers(); //Broadcast immediately to show drawing status
+
+      // Add to active drawers Set to track drawing state
+      activeDrawers.add(socket.id);
+
+      // Broadcast immediately to show drawing status to all other clients
+      broadcastActiveUsers();
     }
   });
 
@@ -242,7 +254,10 @@ io.on("connection", socket => {
         typeof data.color === 'string' && typeof data.size === 'number') {
 
         // Just broadcast this segment to others for live preview
-        socket.broadcast.emit("draw", data);
+        socket.broadcast.emit("draw", {
+          ...data,
+          userId: socket.id // Add user ID to help clients track who's drawing
+        });
 
         // Update sender's state (needed for cursor position)
         const user = activeUsers[socket.id];
@@ -250,6 +265,11 @@ io.on("connection", socket => {
             user.x = data.x1; user.y = data.y1; // Update position to end of line
             user.lastActive = Date.now();
             user.hasMoved = true;
+            // Make sure drawing state is still tracked
+            if (!user.drawing) {
+              user.drawing = true;
+              activeDrawers.add(socket.id);
+            }
         }
         // DO NOT add individual segments to the main drawHistory here
      } else {
@@ -269,14 +289,12 @@ io.on("connection", socket => {
           };
           // Add the complete stroke to history
           drawHistory.push(completeStroke);
-          // console.log(`Added stroke ${completeStroke.id} from user ${socket.id}`); // Less verbose
-          pruneDrawHistory(); // Prune immediately after adding if needed
 
           // Broadcast the newly added stroke to all clients
           // This allows clients to maintain their own consistent history
           io.emit("newStroke", completeStroke);
-          // console.log(`Broadcasted new stroke ${completeStroke.id}`);
 
+          pruneDrawHistory(); // Prune immediately after adding if needed
       } else {
           console.warn(`Received invalid stroke data from ${socket.id}:`, strokeData);
       }
@@ -288,7 +306,10 @@ io.on("connection", socket => {
     if (user) {
       user.drawing = false;
       user.lastActive = Date.now();
-      // console.log(`${user.username} stopped drawing`); // Less verbose
+
+      // Remove from active drawers Set
+      activeDrawers.delete(socket.id);
+
       broadcastActiveUsers(); // Broadcast status change
       //Client now sends stroke via "addStroke" and snapshot via "canvasSnapshot"
     }
@@ -297,7 +318,6 @@ io.on("connection", socket => {
   //Client sends a canvas snapshot (usually after drawing or by request)
   socket.on("canvasSnapshot", dataURL => {
     if (typeof dataURL === 'string' && dataURL.startsWith("data:image/")) {
-      //console.log(`Received snapshot from ${socket.id}`); // Less verbose
       lastCanvasDataURL = dataURL; // Update the authoritative snapshot
       lastCanvasUpdateTime = Date.now();
       //new users will get it on join
@@ -306,53 +326,82 @@ io.on("connection", socket => {
     }
   });
 
-  //Per-User Undo Logic - OPTIMIZED
+  // *** IMPROVED UNDO LOGIC ***
   socket.on("undo", () => {
       const userId = socket.id;
-      let strokeIndexToUndo = -1;
-      // Find the latest stroke by this user that is NOT undone
+      let targetStroke = null;
+      let userStrokesChecked = 0;
+
+      // Iterate backwards through the *entire* history
       for (let i = drawHistory.length - 1; i >= 0; i--) {
-          // Ensure the stroke and userId exist before comparing
-          if (drawHistory[i] && drawHistory[i].userId === userId && !drawHistory[i].undone) {
-              strokeIndexToUndo = i;
-              break;
+          const stroke = drawHistory[i];
+          // Check if the stroke belongs to the requesting user
+          if (stroke && stroke.userId === userId) {
+              userStrokesChecked++; // Count how many of *this user's* strokes we've seen
+
+              // If this stroke is NOT already undone, it's our target
+              if (!stroke.undone) {
+                  targetStroke = stroke; // Found the most recent, non-undone stroke
+                  break; // Stop searching, we found it
+              }
+
+              // If we've already checked the limit for this user, stop searching further back
+              if (userStrokesChecked >= USER_UNDO_REDO_LIMIT) {
+                  console.log(`Undo search for ${userId} stopped after checking ${USER_UNDO_REDO_LIMIT} strokes.`);
+                  break;
+              }
           }
       }
 
-      if (strokeIndexToUndo !== -1) {
-          drawHistory[strokeIndexToUndo].undone = true; // Mark as undone
-          const undoneStroke = drawHistory[strokeIndexToUndo]; // Get the stroke object
-          console.log(`User ${userId} undid stroke ${undoneStroke.id}`);
-          // Emit only the change, not the full history
-          io.emit("strokeUndoStateChanged", { strokeId: undoneStroke.id, undone: true });
+      // If we found a target stroke
+      if (targetStroke) {
+          targetStroke.undone = true; // Mark as undone
+          console.log(`User ${userId} undid stroke ${targetStroke.id}`);
+          // Emit the change for this specific stroke
+          io.emit("strokeUndoStateChanged", { strokeId: targetStroke.id, undone: true });
       } else {
-          // console.log(`No active stroke found for user ${userId} to undo.`); // Less verbose
+          console.log(`No active stroke found for user ${userId} within the last ${USER_UNDO_REDO_LIMIT} checked actions to undo.`);
       }
   });
 
-  //Per-User Redo Logic - OPTIMIZED
+  // *** IMPROVED REDO LOGIC ***
   socket.on("redo", () => {
       const userId = socket.id;
-      let strokeIndexToRedo = -1;
-      // Find the latest stroke by this user that IS undone
+      let targetStroke = null;
+      let userStrokesChecked = 0;
+
+      // Iterate backwards through the *entire* history
       for (let i = drawHistory.length - 1; i >= 0; i--) {
-          // Ensure the stroke and userId exist before comparing
-          if (drawHistory[i] && drawHistory[i].userId === userId && drawHistory[i].undone) {
-              strokeIndexToRedo = i;
-              break; // Found the most recent one
+          const stroke = drawHistory[i];
+          // Check if the stroke belongs to the requesting user
+          if (stroke && stroke.userId === userId) {
+               userStrokesChecked++; // Count how many of *this user's* strokes we've seen
+
+              // If this stroke IS undone, it's our target
+              if (stroke.undone) {
+                  targetStroke = stroke; // Found the most recent, undone stroke
+                  break; // Stop searching, we found it
+              }
+
+              // If we've already checked the limit for this user, stop searching further back
+              if (userStrokesChecked >= USER_UNDO_REDO_LIMIT) {
+                   console.log(`Redo search for ${userId} stopped after checking ${USER_UNDO_REDO_LIMIT} strokes.`);
+                  break;
+              }
           }
       }
 
-      if (strokeIndexToRedo !== -1) {
-          drawHistory[strokeIndexToRedo].undone = false; // Mark as not undone
-          const redoneStroke = drawHistory[strokeIndexToRedo]; // Get the stroke object
-          console.log(`User ${userId} redid stroke ${redoneStroke.id}`);
-          // Emit only the change, not the full history
-          io.emit("strokeUndoStateChanged", { strokeId: redoneStroke.id, undone: false });
+      // If we found a target stroke
+      if (targetStroke) {
+          targetStroke.undone = false; // Mark as not undone (redone)
+          console.log(`User ${userId} redid stroke ${targetStroke.id}`);
+          // Emit the change for this specific stroke
+          io.emit("strokeUndoStateChanged", { strokeId: targetStroke.id, undone: false });
       } else {
-          // console.log(`No undone stroke found for user ${userId} to redo.`); // Less verbose
+           console.log(`No undone stroke found for user ${userId} within the last ${USER_UNDO_REDO_LIMIT} checked actions to redo.`);
       }
   });
+
 
   //Client sends a chat message
   socket.on("sendMessage", (messageData) => {
@@ -386,6 +435,10 @@ io.on("connection", socket => {
     const user = activeUsers[socket.id];
     const username = user ? user.username : 'Unknown';
     console.log(`User ${username} (${socket.id}) disconnected: ${reason}`);
+
+    // Remove from active drawers Set
+    activeDrawers.delete(socket.id);
+
     delete activeUsers[socket.id]; // Remove from active list
     broadcastActiveUsers(); // Notify others
   });

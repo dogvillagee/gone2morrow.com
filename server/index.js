@@ -18,7 +18,7 @@ const io = new Server(server, {
   cors: {
       origin: FRONTEND_URL,
       methods: ["GET", "POST"]
-  }
+  },
 });
 
 const activeUsers = {};
@@ -27,32 +27,20 @@ let lastCanvasDataURL = null;
 let lastCanvasUpdateTime = Date.now();
 let chatMessages = [];
 const activeDrawers = new Set();
+let userUndoStacks = {};
+let userRedoStacks = {};
 
 const RESET_CONFIG = {
-  hour: 0
+  hour: 0,
 };
 const INACTIVITY_LIMIT = 15 * 1000;
-const MAX_DRAW_HISTORY_MEMORY = 200;
+const MAX_DRAW_HISTORY_MEMORY = 500;
 const BROADCAST_INTERVAL = 50;
 const SNAPSHOT_REQUEST_INTERVAL = 20000;
 const SNAPSHOT_STALE_TIME = 45000;
 const HISTORY_PRUNE_INTERVAL = 30000;
 const MAX_CHAT_HISTORY = 20;
-const USER_UNDO_REDO_LIMIT = 50;
-
-const userStrokeHistory = {};
-
-function trackUserStroke(userId, strokeId) {
-  if (!userStrokeHistory[userId]) {
-    userStrokeHistory[userId] = [];
-  }
-  
-  userStrokeHistory[userId].push(strokeId);
-  
-  if (userStrokeHistory[userId].length > USER_UNDO_REDO_LIMIT) {
-    userStrokeHistory[userId].shift();
-  }
-}
+const MAX_USER_UNDO_STACK = 500;
 
 function broadcastActiveUsers() {
   const now = Date.now();
@@ -87,48 +75,63 @@ function requestCanvasSnapshot() {
       }
     }
     if (mostRecentActiveId) {
-      console.log(`Requesting snapshot from user ${mostRecentActiveId}`);
       io.to(mostRecentActiveId).emit("requestCanvasSnapshot");
     }
   }
 }
 setInterval(requestCanvasSnapshot, SNAPSHOT_REQUEST_INTERVAL);
 
+function pruneUserStacks() {
+  const historyIds = new Set(drawHistory.map(stroke => stroke.id));
+  
+  for (const userId in userUndoStacks) {
+    const validStrokeIds = userUndoStacks[userId].filter(id => historyIds.has(id));
+    userUndoStacks[userId] = validStrokeIds.slice(-MAX_USER_UNDO_STACK);
+  }
+  
+  for (const userId in userRedoStacks) {
+    const validStrokeIds = userRedoStacks[userId].filter(id => historyIds.has(id));
+    userRedoStacks[userId] = validStrokeIds.slice(-MAX_USER_UNDO_STACK);
+  }
+}
+
 function pruneDrawHistory() {
   if (drawHistory.length > MAX_DRAW_HISTORY_MEMORY) {
-    const removedCount = drawHistory.length - MAX_DRAW_HISTORY_MEMORY;
-    console.log(`Pruning draw history from ${drawHistory.length} to ${MAX_DRAW_HISTORY_MEMORY} strokes`);
+    const keepStartIndex = drawHistory.length - MAX_DRAW_HISTORY_MEMORY;
     
-    const strokesToRemove = drawHistory.slice(0, removedCount);
-    strokesToRemove.forEach(stroke => {
-      Object.keys(userStrokeHistory).forEach(userId => {
-        const index = userStrokeHistory[userId].indexOf(stroke.id);
-        if (index !== -1) {
-          userStrokeHistory[userId].splice(index, 1);
-        }
-      });
-    });
+    const preserveIds = new Set();
     
-    drawHistory = drawHistory.slice(removedCount);
+    for (const userId in userUndoStacks) {
+      userUndoStacks[userId].forEach(id => preserveIds.add(id));
+    }
+    
+    for (const userId in userRedoStacks) {
+      userRedoStacks[userId].forEach(id => preserveIds.add(id));
+    }
+    
+    const toRemove = drawHistory.slice(0, keepStartIndex);
+    const preservedStrokes = toRemove.filter(stroke => preserveIds.has(stroke.id));
+    
+    drawHistory = [...preservedStrokes, ...drawHistory.slice(keepStartIndex)];
+    
+    pruneUserStacks();
   }
 }
 setInterval(pruneDrawHistory, HISTORY_PRUNE_INTERVAL);
 
 function clearCanvas() {
-  console.log("Clearing canvas state...");
   drawHistory = [];
   lastCanvasDataURL = null;
   lastCanvasUpdateTime = Date.now();
   chatMessages = [];
-  Object.keys(userStrokeHistory).forEach(userId => {
-    userStrokeHistory[userId] = [];
-  });
+  activeDrawers.clear();
+  userUndoStacks = {};
+  userRedoStacks = {};
   io.emit("clear");
   console.log("Canvas cleared at", new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
 }
 
 let resetTimeoutId = null;
-
 function scheduleReset() {
     if (resetTimeoutId) clearTimeout(resetTimeoutId);
 
@@ -146,7 +149,6 @@ function scheduleReset() {
     const now = new Date();
     const estDate = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
     const targetDate = new Date(estDate);
-
     targetDate.setHours(RESET_CONFIG.hour, 0, 0, 0);
 
     if (estDate >= targetDate) {
@@ -168,20 +170,17 @@ function scheduleReset() {
 }
 
 io.on("connection", socket => {
-  console.log("User connected:", socket.id);
-
-  activeUsers[socket.id] = {
+  const userId = socket.id;
+  activeUsers[userId] = {
     username: `Anonymous${Math.floor(Math.random() * 1000)}`,
     x: 0, y: 0, drawing: false, lastActive: Date.now(), hasMoved: false,
   };
-  
-  userStrokeHistory[socket.id] = [];
+  userUndoStacks[userId] = [];
+  userRedoStacks[userId] = [];
 
-  console.log(`Sending ${drawHistory.length} history strokes to ${socket.id}`);
   socket.emit("initialHistory", drawHistory);
 
   if (lastCanvasDataURL) {
-    console.log(`Sending snapshot to ${socket.id}`);
     socket.emit("canvasState", lastCanvasDataURL);
   }
   socket.emit("chatHistory", chatMessages);
@@ -189,17 +188,16 @@ io.on("connection", socket => {
   broadcastActiveUsers();
 
   socket.on("setUsername", username => {
-    const user = activeUsers[socket.id];
+    const user = activeUsers[userId];
     if (user && typeof username === 'string' && username.trim()) {
       user.username = username.slice(0, 30);
       user.lastActive = Date.now();
-      console.log(`User ${socket.id} is now ${user.username}`);
       broadcastActiveUsers();
     }
   });
 
   socket.on("mouseMove", data => {
-    const user = activeUsers[socket.id];
+    const user = activeUsers[userId];
     if (user && data && typeof data.x === 'number' && typeof data.y === 'number') {
       user.x = data.x; user.y = data.y;
       user.lastActive = Date.now();
@@ -208,14 +206,13 @@ io.on("connection", socket => {
   });
 
   socket.on("startDrawing", data => {
-    const user = activeUsers[socket.id];
+    const user = activeUsers[userId];
     if (user && data && typeof data.x === 'number' && typeof data.y === 'number') {
       user.drawing = true;
       user.x = data.x; user.y = data.y;
       user.lastActive = Date.now();
       user.hasMoved = true;
-
-      activeDrawers.add(socket.id);
+      activeDrawers.add(userId);
       broadcastActiveUsers();
     }
   });
@@ -227,21 +224,21 @@ io.on("connection", socket => {
 
         socket.broadcast.emit("draw", {
           ...data,
-          userId: socket.id
+          userId: userId
         });
 
-        const user = activeUsers[socket.id];
+        const user = activeUsers[userId];
         if (user) {
             user.x = data.x1; user.y = data.y1;
             user.lastActive = Date.now();
             user.hasMoved = true;
             if (!user.drawing) {
               user.drawing = true;
-              activeDrawers.add(socket.id);
+              activeDrawers.add(userId);
             }
         }
      } else {
-         console.warn(`Invalid draw data from ${socket.id}:`, JSON.stringify(data));
+         console.warn(`Invalid draw data from ${userId}:`, JSON.stringify(data));
      }
   });
 
@@ -249,26 +246,34 @@ io.on("connection", socket => {
       if (strokeData && strokeData.id && Array.isArray(strokeData.segments) && strokeData.segments.length > 0) {
           const completeStroke = {
               ...strokeData,
-              userId: socket.id,
-              undone: false
+              userId: userId,
+              undone: false,
+              timestamp: Date.now()
           };
-          
           drawHistory.push(completeStroke);
-          trackUserStroke(socket.id, strokeData.id);
+
+          if (!userUndoStacks[userId]) userUndoStacks[userId] = [];
+          userUndoStacks[userId].push(completeStroke.id);
+          
+          if (userUndoStacks[userId].length > MAX_USER_UNDO_STACK) {
+            userUndoStacks[userId] = userUndoStacks[userId].slice(-MAX_USER_UNDO_STACK);
+          }
+          
+          userRedoStacks[userId] = [];
 
           io.emit("newStroke", completeStroke);
           pruneDrawHistory();
       } else {
-          console.warn(`Received invalid stroke data from ${socket.id}:`, strokeData);
+          console.warn(`Received invalid stroke data from ${userId}:`, strokeData);
       }
   });
 
   socket.on("stopDrawing", () => {
-    const user = activeUsers[socket.id];
+    const user = activeUsers[userId];
     if (user) {
       user.drawing = false;
       user.lastActive = Date.now();
-      activeDrawers.delete(socket.id);
+      activeDrawers.delete(userId);
       broadcastActiveUsers();
     }
   });
@@ -278,71 +283,74 @@ io.on("connection", socket => {
       lastCanvasDataURL = dataURL;
       lastCanvasUpdateTime = Date.now();
     } else {
-        console.warn(`Invalid snapshot data from ${socket.id}`);
+        console.warn(`Invalid snapshot data from ${userId}`);
     }
   });
 
   socket.on("undo", () => {
-      const userId = socket.id;
-      
-      if (!userStrokeHistory[userId] || userStrokeHistory[userId].length === 0) {
-          console.log(`No strokes found for user ${userId} to undo.`);
+      if (!userUndoStacks[userId] || userUndoStacks[userId].length === 0) {
           return;
       }
+
+      const strokeIdToUndo = userUndoStacks[userId].pop();
       
-      let undoPerformed = false;
-      
-      for (let i = userStrokeHistory[userId].length - 1; i >= 0; i--) {
-          const strokeId = userStrokeHistory[userId][i];
-          const strokeIndex = drawHistory.findIndex(s => s && s.id === strokeId);
-          
-          if (strokeIndex !== -1 && !drawHistory[strokeIndex].undone) {
-              drawHistory[strokeIndex].undone = true;
-              console.log(`User ${userId} undid stroke ${strokeId}`);
-              io.emit("strokeUndoStateChanged", { strokeId: strokeId, undone: true });
-              undoPerformed = true;
-              break;
+      const targetStrokeIndex = drawHistory.findIndex(stroke => stroke.id === strokeIdToUndo && stroke.userId === userId);
+
+      if (targetStrokeIndex !== -1) {
+          const targetStroke = drawHistory[targetStrokeIndex];
+          if (!targetStroke.undone) {
+              targetStroke.undone = true;
+              
+              if (!userRedoStacks[userId]) userRedoStacks[userId] = [];
+              userRedoStacks[userId].push(strokeIdToUndo);
+              
+              if (userRedoStacks[userId].length > MAX_USER_UNDO_STACK) {
+                userRedoStacks[userId] = userRedoStacks[userId].slice(-MAX_USER_UNDO_STACK);
+              }
+              
+              io.emit("strokeUndoStateChanged", { strokeId: targetStroke.id, undone: true });
+          } else {
+              userUndoStacks[userId].push(strokeIdToUndo);
           }
-      }
-      
-      if (!undoPerformed) {
-          console.log(`No active strokes found for user ${userId} to undo.`);
+      } else {
+          console.warn(`Undo failed: Stroke ${strokeIdToUndo} not found in history for user ${userId}`);
       }
   });
 
   socket.on("redo", () => {
-      const userId = socket.id;
-      
-      if (!userStrokeHistory[userId] || userStrokeHistory[userId].length === 0) {
-          console.log(`No strokes found for user ${userId} to redo.`);
+      if (!userRedoStacks[userId] || userRedoStacks[userId].length === 0) {
           return;
       }
+
+      const strokeIdToRedo = userRedoStacks[userId].pop();
       
-      let redoPerformed = false;
-      
-      for (let i = userStrokeHistory[userId].length - 1; i >= 0; i--) {
-          const strokeId = userStrokeHistory[userId][i];
-          const strokeIndex = drawHistory.findIndex(s => s && s.id === strokeId);
-          
-          if (strokeIndex !== -1 && drawHistory[strokeIndex].undone) {
-              drawHistory[strokeIndex].undone = false;
-              console.log(`User ${userId} redid stroke ${strokeId}`);
-              io.emit("strokeUndoStateChanged", { strokeId: strokeId, undone: false });
-              redoPerformed = true;
-              break;
+      const targetStrokeIndex = drawHistory.findIndex(stroke => stroke.id === strokeIdToRedo && stroke.userId === userId);
+
+      if (targetStrokeIndex !== -1) {
+          const targetStroke = drawHistory[targetStrokeIndex];
+          if (targetStroke.undone) {
+              targetStroke.undone = false;
+              
+              if (!userUndoStacks[userId]) userUndoStacks[userId] = [];
+              userUndoStacks[userId].push(strokeIdToRedo);
+              
+              if (userUndoStacks[userId].length > MAX_USER_UNDO_STACK) {
+                userUndoStacks[userId] = userUndoStacks[userId].slice(-MAX_USER_UNDO_STACK);
+              }
+              
+              io.emit("strokeUndoStateChanged", { strokeId: targetStroke.id, undone: false });
+          } else {
+              userRedoStacks[userId].push(strokeIdToRedo);
           }
-      }
-      
-      if (!redoPerformed) {
-          console.log(`No undone strokes found for user ${userId} to redo.`);
+      } else {
+          console.warn(`Redo failed: Stroke ${strokeIdToRedo} not found in history for user ${userId}`);
       }
   });
 
   socket.on("sendMessage", (messageData) => {
-    const user = activeUsers[socket.id];
+    const user = activeUsers[userId];
     if (user && messageData && typeof messageData.text === 'string') {
       const sanitizedText = messageData.text.trim().slice(0, 200);
-
       if (sanitizedText) {
           const message = {
             text: sanitizedText,
@@ -356,22 +364,24 @@ io.on("connection", socket => {
           io.emit("chatMessage", message);
       }
     } else {
-        console.warn(`Invalid chat data from ${socket.id}:`, messageData);
+        console.warn(`Invalid chat data from ${userId}:`, messageData);
     }
   });
 
   socket.on("disconnect", (reason) => {
-    const user = activeUsers[socket.id];
+    const user = activeUsers[userId];
     const username = user ? user.username : 'Unknown';
-    console.log(`User ${username} (${socket.id}) disconnected: ${reason}`);
 
-    activeDrawers.delete(socket.id);
-    delete activeUsers[socket.id];
+    activeDrawers.delete(userId);
+    delete activeUsers[userId];
+    delete userUndoStacks[userId];
+    delete userRedoStacks[userId];
+
     broadcastActiveUsers();
   });
 
   socket.on("error", (error) => {
-      console.error(`Socket error (${socket.id}):`, error);
+      console.error(`Socket error (${userId}):`, error);
   });
 });
 

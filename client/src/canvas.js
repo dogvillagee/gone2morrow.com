@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:4000";
 const socket = io(BACKEND_URL, { autoConnect: false });
 
-const MAX_DRAW_HISTORY_CLIENT = 100;
+const MAX_DRAW_HISTORY_CLIENT = 500; // Match server
 
 export default function Canvas() {
   const canvasRef = useRef(null);
@@ -32,7 +32,7 @@ export default function Canvas() {
   useEffect(() => { tempEraserRef.current = tempEraser; }, [tempEraser]);
 
   const drawHistoryRef = useRef([]);
-  const userStrokeHistoryRef = useRef([]);
+  // Removed userStrokeHistoryRef
   const currentStrokeIdRef = useRef(null);
   const currentSegmentsRef = useRef([]);
 
@@ -132,7 +132,7 @@ export default function Canvas() {
             try {
                 previousDataUrl = canvasDataRef.current || canvas.toDataURL("image/png");
             } catch (error) {
-                console.warn("Could not cache canvas during resize setup");
+                 console.warn("Could not cache canvas during resize setup");
             }
         }
 
@@ -315,13 +315,8 @@ export default function Canvas() {
                 id: currentStrokeIdRef.current,
                 segments: currentSegmentsRef.current
             };
-            
             socket.emit("addStroke", currentStroke);
-            
-            userStrokeHistoryRef.current.push(currentStrokeIdRef.current);
-            if (userStrokeHistoryRef.current.length > MAX_DRAW_HISTORY_CLIENT) {
-                userStrokeHistoryRef.current = userStrokeHistoryRef.current.slice(-MAX_DRAW_HISTORY_CLIENT);
-            }
+            // Client no longer manages its own stroke history list here
         }
 
         currentStrokeIdRef.current = null;
@@ -423,31 +418,32 @@ export default function Canvas() {
 
     socket.on("newStroke", (newStroke) => {
         if (newStroke && newStroke.id) {
+            // Check if stroke already exists to prevent duplicates
             const existingIndex = drawHistoryRef.current.findIndex(s => s && s.id === newStroke.id);
             if (existingIndex === -1) {
                 drawHistoryRef.current.push(newStroke);
+                // Prune client history if it exceeds the limit
                 if (drawHistoryRef.current.length > MAX_DRAW_HISTORY_CLIENT) {
                     drawHistoryRef.current = drawHistoryRef.current.slice(-MAX_DRAW_HISTORY_CLIENT);
                 }
-                
-                if (newStroke.userId === socket.id) {
-                    if (!userStrokeHistoryRef.current.includes(newStroke.id)) {
-                        userStrokeHistoryRef.current.push(newStroke.id);
-                        if (userStrokeHistoryRef.current.length > MAX_DRAW_HISTORY_CLIENT) {
-                            userStrokeHistoryRef.current = userStrokeHistoryRef.current.slice(-MAX_DRAW_HISTORY_CLIENT);
-                        }
-                    }
-                }
+            } else {
+                 // Optional: Update existing stroke if needed (e.g., if segments could change)
+                 // drawHistoryRef.current[existingIndex] = newStroke;
             }
         }
     });
+
 
     socket.on("strokeUndoStateChanged", ({ strokeId, undone }) => {
         if (!strokeId) return;
         const strokeIndex = drawHistoryRef.current.findIndex(s => s && s.id === strokeId);
         if (strokeIndex !== -1) {
             drawHistoryRef.current[strokeIndex].undone = undone;
-            redrawCanvasFromHistory();
+            redrawCanvasFromHistory(); // Trigger redraw after state change
+        } else {
+             console.warn(`Stroke ${strokeId} not found in local history for undo/redo update.`);
+             // Optionally trigger a full redraw if this causes visual issues
+             // redrawCanvasFromHistory();
         }
     });
 
@@ -457,7 +453,7 @@ export default function Canvas() {
       ctx.fillStyle = "#FFFFFF"; ctx.fillRect(0, 0, canvas.width, canvas.height);
       canvasDataRef.current = null;
       drawHistoryRef.current = [];
-      userStrokeHistoryRef.current = [];
+      // userStrokeHistoryRef.current = []; // Removed
       initialStateLoaded = true;
     });
 

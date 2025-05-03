@@ -4,6 +4,23 @@ import React, { useEffect, useState } from "react";
 import Canvas from "./canvas"; 
 import "./App.css"; 
 
+//youtube tutorial attempt at trying to disable inspect element
+document.oncontextmenu = () => { 
+  return false;
+}
+document.onkeydown = (e) => { 
+  if (e.key === "F12") {
+    alert("TRALALERO TRALALA."); //F12 case
+    return false;
+  }
+  if (e.ctrlkey && e.key === "u") {
+    alert("CTRL+U is disabled on this page."); //page sources case (doesnt work though?)
+    return false;
+  }
+
+};
+
+
 function App() {
   const [timeLeft, setTimeLeft] = useState("");
 
@@ -19,16 +36,16 @@ function App() {
     const onKeyDown = (e) => {
       if (
         (e.ctrlKey || e.metaKey) &&
-        ["+", "-", "=", "0"].includes(e.key) // Prevent Ctrl + (+, -, =, 0) + macos
+        ["+", "-", "=", "0"].includes(e.key) //Prevent Ctrl + (+, -, =, 0) + macos
       ) {
         e.preventDefault();
       }
     };
-
+    
     window.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("keydown", onKeyDown);
 
-    // 3) Set up countdown timer
+    //Set up countdown timer
     const updateCountdown = () => {
       const now = new Date();
       const midnight = new Date();

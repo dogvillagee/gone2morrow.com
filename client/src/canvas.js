@@ -316,7 +316,6 @@ export default function Canvas() {
                 segments: currentSegmentsRef.current
             };
             socket.emit("addStroke", currentStroke);
-            // Client no longer manages its own stroke history list here
         }
 
         currentStrokeIdRef.current = null;
@@ -339,7 +338,7 @@ export default function Canvas() {
     };
 
     const preventDefault = e => e.preventDefault();
-    canvas.addEventListener("contextmenu", preventDefault);
+    canvas.addEventListener("contextmenu", preventDefault); //right click menu
     canvas.addEventListener("mousedown", startDrawing);
     canvas.addEventListener("mousemove", draw);
     canvas.addEventListener("mouseup", stopDrawing);
@@ -418,7 +417,7 @@ export default function Canvas() {
 
     socket.on("newStroke", (newStroke) => {
         if (newStroke && newStroke.id) {
-            // Check if stroke already exists to prevent duplicates
+            //Check if stroke already exists to prevent duplicates
             const existingIndex = drawHistoryRef.current.findIndex(s => s && s.id === newStroke.id);
             if (existingIndex === -1) {
                 drawHistoryRef.current.push(newStroke);
@@ -427,8 +426,8 @@ export default function Canvas() {
                     drawHistoryRef.current = drawHistoryRef.current.slice(-MAX_DRAW_HISTORY_CLIENT);
                 }
             } else {
-                 // Optional: Update existing stroke if needed (e.g., if segments could change)
-                 // drawHistoryRef.current[existingIndex] = newStroke;
+                 //Optional: Update existing stroke if needed (e.g., if segments could change)
+                 //drawHistoryRef.current[existingIndex] = newStroke;
             }
         }
     });
@@ -439,11 +438,10 @@ export default function Canvas() {
         const strokeIndex = drawHistoryRef.current.findIndex(s => s && s.id === strokeId);
         if (strokeIndex !== -1) {
             drawHistoryRef.current[strokeIndex].undone = undone;
-            redrawCanvasFromHistory(); // Trigger redraw after state change
+            redrawCanvasFromHistory(); //Trigger redraw after state change
         } else {
              console.warn(`Stroke ${strokeId} not found in local history for undo/redo update.`);
-             // Optionally trigger a full redraw if this causes visual issues
-             // redrawCanvasFromHistory();
+             //redrawCanvasFromHistory();
         }
     });
 
@@ -453,7 +451,7 @@ export default function Canvas() {
       ctx.fillStyle = "#FFFFFF"; ctx.fillRect(0, 0, canvas.width, canvas.height);
       canvasDataRef.current = null;
       drawHistoryRef.current = [];
-      // userStrokeHistoryRef.current = []; // Removed
+      // userStrokeHistoryRef.current = [];
       initialStateLoaded = true;
     });
 
@@ -565,7 +563,7 @@ export default function Canvas() {
         <button onClick={() => setTool("brush")} className={tool === "brush" ? "active" : ""} title="Brush Tool (Right-click to erase)">BRUSH</button>
         <button onClick={() => setTool("eraser")} className={tool === "eraser" ? "active" : ""} title="Eraser Tool">ERASE</button>
         <label htmlFor="size-slider">Size:
-          <input id="size-slider" type="range" min={1} max={20} value={size} onChange={e => setSize(Number(e.target.value))} />
+          <input id="size-slider" type="range" min={1} max={24} value={size} onChange={e => setSize(Number(e.target.value))} />
           <span>{size}px</span>
         </label>
         <label htmlFor="color-picker">Color:

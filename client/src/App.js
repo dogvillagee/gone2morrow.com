@@ -71,7 +71,7 @@ function App() {
       <div className="info-box">
         <div className="shortcut-tip">
           {}
-          <span>Tip: Hold <kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo, hold <kbd>Ctrl</kbd>+<kbd>Y</kbd> to redo, right-click to erase</span>
+          <span>Tip: Hold <kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo, hold <kbd>Ctrl</kbd>+<kbd>Y</kbd> to redo, right click to erase</span>
         </div>
         <div>
           Canvas resets in: <span className="countdown">{timeLeft}</span>

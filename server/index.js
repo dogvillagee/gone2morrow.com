@@ -27,8 +27,7 @@ let lastCanvasDataURL = null;
 let lastCanvasUpdateTime = Date.now();
 let chatMessages = [];
 const activeDrawers = new Set();
-let userUndoStacks = {};
-let userRedoStacks = {};
+const RESERVED_NAMES = new Set(['admin', 'mod', 'moderator', 'system', 'server', 'gone2morrow']);
 
 const RESET_CONFIG = {
   hour: 0,
@@ -40,13 +39,12 @@ const SNAPSHOT_REQUEST_INTERVAL = 20000;
 const SNAPSHOT_STALE_TIME = 45000;
 const HISTORY_PRUNE_INTERVAL = 30000;
 const MAX_CHAT_HISTORY = 20;
-const MAX_USER_UNDO_STACK = 500;
 
 function broadcastActiveUsers() {
   const now = Date.now();
   const filteredUsers = {};
   for (const [id, user] of Object.entries(activeUsers)) {
-    if (user.hasMoved && now - user.lastActive <= INACTIVITY_LIMIT) {
+    if (user && user.hasMoved && now - user.lastActive <= INACTIVITY_LIMIT) {
       filteredUsers[id] = {
         username: user.username,
         x: user.x,
@@ -62,14 +60,14 @@ setInterval(broadcastActiveUsers, BROADCAST_INTERVAL);
 function requestCanvasSnapshot() {
   const now = Date.now();
   const activeClientCount = Object.keys(activeUsers).filter(
-    id => activeUsers[id].hasMoved && now - activeUsers[id].lastActive <= INACTIVITY_LIMIT
+    id => activeUsers[id]?.hasMoved && now - activeUsers[id]?.lastActive <= INACTIVITY_LIMIT
   ).length;
 
   if ((activeClientCount > 0 && now - lastCanvasUpdateTime > SNAPSHOT_STALE_TIME) || !lastCanvasDataURL) {
     let mostRecentActiveId = null;
     let maxLastActiveTime = 0;
     for (const [id, user] of Object.entries(activeUsers)) {
-      if (user.hasMoved && user.lastActive > maxLastActiveTime) {
+      if (user && user.hasMoved && user.lastActive > maxLastActiveTime) {
         mostRecentActiveId = id;
         maxLastActiveTime = user.lastActive;
       }
@@ -81,52 +79,21 @@ function requestCanvasSnapshot() {
 }
 setInterval(requestCanvasSnapshot, SNAPSHOT_REQUEST_INTERVAL);
 
-function pruneUserStacks() {
-  const historyIds = new Set(drawHistory.map(stroke => stroke.id));
-  
-  for (const userId in userUndoStacks) {
-    const validStrokeIds = userUndoStacks[userId].filter(id => historyIds.has(id));
-    userUndoStacks[userId] = validStrokeIds.slice(-MAX_USER_UNDO_STACK);
-  }
-  
-  for (const userId in userRedoStacks) {
-    const validStrokeIds = userRedoStacks[userId].filter(id => historyIds.has(id));
-    userRedoStacks[userId] = validStrokeIds.slice(-MAX_USER_UNDO_STACK);
-  }
-}
-
 function pruneDrawHistory() {
   if (drawHistory.length > MAX_DRAW_HISTORY_MEMORY) {
-    const keepStartIndex = drawHistory.length - MAX_DRAW_HISTORY_MEMORY;
-    
-    const preserveIds = new Set();
-    
-    for (const userId in userUndoStacks) {
-      userUndoStacks[userId].forEach(id => preserveIds.add(id));
-    }
-    
-    for (const userId in userRedoStacks) {
-      userRedoStacks[userId].forEach(id => preserveIds.add(id));
-    }
-    
-    const toRemove = drawHistory.slice(0, keepStartIndex);
-    const preservedStrokes = toRemove.filter(stroke => preserveIds.has(stroke.id));
-    
-    drawHistory = [...preservedStrokes, ...drawHistory.slice(keepStartIndex)];
-    
-    pruneUserStacks();
+    const removedCount = drawHistory.length - MAX_DRAW_HISTORY_MEMORY;
+    drawHistory = drawHistory.slice(removedCount);
   }
 }
 setInterval(pruneDrawHistory, HISTORY_PRUNE_INTERVAL);
 
 function clearCanvas() {
+  console.log("Clearing canvas state...");
   drawHistory = [];
   lastCanvasDataURL = null;
   lastCanvasUpdateTime = Date.now();
   chatMessages = [];
   activeDrawers.clear();
-  userUndoStacks = {};
-  userRedoStacks = {};
   io.emit("clear");
   console.log("Canvas cleared at", new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
 }
@@ -175,8 +142,6 @@ io.on("connection", socket => {
     username: `Anonymous${Math.floor(Math.random() * 1000)}`,
     x: 0, y: 0, drawing: false, lastActive: Date.now(), hasMoved: false,
   };
-  userUndoStacks[userId] = [];
-  userRedoStacks[userId] = [];
 
   socket.emit("initialHistory", drawHistory);
 
@@ -189,12 +154,18 @@ io.on("connection", socket => {
 
   socket.on("setUsername", username => {
     const user = activeUsers[userId];
-    if (user && typeof username === 'string' && username.trim()) {
-      user.username = username.slice(0, 30);
+    const cleanedUsername = typeof username === 'string' ? username.trim() : '';
+    const lowerUser = cleanedUsername.toLowerCase();
+
+    if (user && cleanedUsername && cleanedUsername.length <= 30 && !RESERVED_NAMES.has(lowerUser)) {
+      user.username = cleanedUsername;
       user.lastActive = Date.now();
       broadcastActiveUsers();
+    } else {
+        console.warn(`User ${userId} tried to set invalid username: "${username}"`);
     }
   });
+
 
   socket.on("mouseMove", data => {
     const user = activeUsers[userId];
@@ -247,21 +218,10 @@ io.on("connection", socket => {
           const completeStroke = {
               ...strokeData,
               userId: userId,
-              undone: false,
-              timestamp: Date.now()
+              undone: false
           };
           drawHistory.push(completeStroke);
-
-          if (!userUndoStacks[userId]) userUndoStacks[userId] = [];
-          userUndoStacks[userId].push(completeStroke.id);
-          
-          if (userUndoStacks[userId].length > MAX_USER_UNDO_STACK) {
-            userUndoStacks[userId] = userUndoStacks[userId].slice(-MAX_USER_UNDO_STACK);
-          }
-          
-          userRedoStacks[userId] = [];
-
-          io.emit("newStroke", completeStroke);
+          socket.broadcast.emit("newStroke", completeStroke);
           pruneDrawHistory();
       } else {
           console.warn(`Received invalid stroke data from ${userId}:`, strokeData);
@@ -287,65 +247,42 @@ io.on("connection", socket => {
     }
   });
 
-  socket.on("undo", () => {
-      if (!userUndoStacks[userId] || userUndoStacks[userId].length === 0) {
-          return;
-      }
-
-      const strokeIdToUndo = userUndoStacks[userId].pop();
-      
-      const targetStrokeIndex = drawHistory.findIndex(stroke => stroke.id === strokeIdToUndo && stroke.userId === userId);
+  socket.on("attemptUndo", (strokeId) => {
+      if (!strokeId) return;
+      const targetStrokeIndex = drawHistory.findIndex(stroke => stroke.id === strokeId);
 
       if (targetStrokeIndex !== -1) {
           const targetStroke = drawHistory[targetStrokeIndex];
-          if (!targetStroke.undone) {
+          if (targetStroke.userId === userId && !targetStroke.undone) {
               targetStroke.undone = true;
-              
-              if (!userRedoStacks[userId]) userRedoStacks[userId] = [];
-              userRedoStacks[userId].push(strokeIdToUndo);
-              
-              if (userRedoStacks[userId].length > MAX_USER_UNDO_STACK) {
-                userRedoStacks[userId] = userRedoStacks[userId].slice(-MAX_USER_UNDO_STACK);
-              }
               
               io.emit("strokeUndoStateChanged", { strokeId: targetStroke.id, undone: true });
           } else {
-              userUndoStacks[userId].push(strokeIdToUndo);
+              console.warn(`Invalid undo attempt by ${userId} for stroke ${strokeId}`);
           }
       } else {
-          console.warn(`Undo failed: Stroke ${strokeIdToUndo} not found in history for user ${userId}`);
+           console.warn(`Undo attempt failed: Stroke ${strokeId} not found in history.`);
       }
   });
 
-  socket.on("redo", () => {
-      if (!userRedoStacks[userId] || userRedoStacks[userId].length === 0) {
-          return;
-      }
-
-      const strokeIdToRedo = userRedoStacks[userId].pop();
-      
-      const targetStrokeIndex = drawHistory.findIndex(stroke => stroke.id === strokeIdToRedo && stroke.userId === userId);
+  socket.on("attemptRedo", (strokeId) => {
+      if (!strokeId) return;
+       const targetStrokeIndex = drawHistory.findIndex(stroke => stroke.id === strokeId);
 
       if (targetStrokeIndex !== -1) {
           const targetStroke = drawHistory[targetStrokeIndex];
-          if (targetStroke.undone) {
+          if (targetStroke.userId === userId && targetStroke.undone) {
               targetStroke.undone = false;
-              
-              if (!userUndoStacks[userId]) userUndoStacks[userId] = [];
-              userUndoStacks[userId].push(strokeIdToRedo);
-              
-              if (userUndoStacks[userId].length > MAX_USER_UNDO_STACK) {
-                userUndoStacks[userId] = userUndoStacks[userId].slice(-MAX_USER_UNDO_STACK);
-              }
               
               io.emit("strokeUndoStateChanged", { strokeId: targetStroke.id, undone: false });
           } else {
-              userRedoStacks[userId].push(strokeIdToRedo);
+               console.warn(`Invalid redo attempt by ${userId} for stroke ${strokeId}`);
           }
       } else {
-          console.warn(`Redo failed: Stroke ${strokeIdToRedo} not found in history for user ${userId}`);
+           console.warn(`Redo attempt failed: Stroke ${strokeId} not found in history.`);
       }
   });
+
 
   socket.on("sendMessage", (messageData) => {
     const user = activeUsers[userId];
@@ -374,9 +311,6 @@ io.on("connection", socket => {
 
     activeDrawers.delete(userId);
     delete activeUsers[userId];
-    delete userUndoStacks[userId];
-    delete userRedoStacks[userId];
-
     broadcastActiveUsers();
   });
 
